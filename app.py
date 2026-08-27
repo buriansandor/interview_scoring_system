@@ -73,22 +73,32 @@ def load_the_CSV():
 
 ############# Agent ########################
 # 1. Definiáljuk az eszközöket (Tools), amiket az ágens használhat
-def range_and_type_checker():
+def range_and_type_checker(score: float, range_min: float = 0.0, range_max: float = 10.0) -> str:
     """
     If the agent provides a value outside the scale, this tool immediately forces the model to 
     regenerate the output with an error message 'The score is not within the specified range; please try again.' 
     before the data is written to the output file.
     """
+    try:
+        if not isinstance(score, (int, float)):
+            return "[ERROR] The score is not a number; please try again."
+        if not (range_min <= score <= range_max):
+            return "[ERROR] The score is not within the specified range(%s, %s); please try again." % (range_min, range_max)
+        return "[INFO] The score is valid."
+    except Exception as e:
+        return f"[ERROR] An unexpected error occurred: {e}"
 
-
-def confidentality_enhance():
+def confidentality_enhance(current_score: float, confidence: float, reasoning: str) -> str:
     """
     If the model is uncertain (confidence below 0.5), 
     we do not accept the low-quality prediction; 
     instead, we initiate a guided re-evaluation (Self-Refine) loop.
     """
-
-
+    if confidence < 0.5:
+        return f"[WARNING] The model's confidence is low ({confidence}); initiating a guided Self-Refine loop. Reasoning: {reasoning}. Please re-read the respondent's texts and provide a new evaluation. Focus in whether the response contains the key points and whether it is relevant to the question. Please provide a new score and reasoning. If the issue persists, use a lower score, but with at least 0.51 confidence value."
+    else:
+        return f"[INFO] The model's confidence is sufficient ({confidence}); no Self-Refine loop needed. Reasoning: {reasoning}."
+    
 # Biztonságos eszköztár regisztráció
 my_tools = [range_and_type_checker, confidentality_enhance]
 tool_config = types.Tool(
@@ -99,35 +109,41 @@ tool_config = types.Tool(
             parameters={
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string"}
+                    "score": {"type": "number", 
+                              "description": "This function checks if the score is within the specified range and of the correct type."}
                 },
-                "required": ["path"],
+                "required": ["score"],
             },
         ),
         types.FunctionDeclaration(
             name="confidentality_enhance",
-            description="If the model is uncertain, initiate a guided Self-Refine loop.",
+            description="It's necessary to use it if the model is uncertain, the confidence is lower then 0.5, to initiate a guided Self-Refine loop.",
             parameters={
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string"}
+                    "current_score": {"type": "number",
+                                      "description": "The curreent score provided by the model, which is below the confidence threshold of 0.5."},
+                    "confidence": {"type": "number",
+                                   "description": "The confidence level of your evaluation, which is below the threshold of 0.5, indicating uncertainty in the model's prediction."},
+                    "reasoning": {"type": "string",
+                                   "description": "The reasoning behind your evaluation, explaining why the model's confidence is low and why a Self-Refine loop is necessary."}              
                 },
-                "required": ["command"],
+                "required": ["current_score", "confidence", "reasoning"],
             },
         ),
     ]
 )
 
-api_key = os.getenv("GEMINI_API_KEY", "").strip()
-if not api_key:
-    api_key = try_load_api_key_from_key_file()
-
-if not api_key:
-    logger.warning('[WARNING]\tGEMINI_API_KEY is not set. Stopping program. \nPlease set the environment variable and try again: $env:GEMINI_API_KEY="YOUR_API_KEY_HERE"\n or set it in a .key file in the current directory.')
-    raise SystemExit(1)
-
-client = genai.Client(api_key=api_key)
-
+# A végső kimenet sémája, amit a modellnek vissza kell adnia
+final_output_schema = types.Schema(
+    type=types.Type.OBJECT,
+    properties={
+        "score": types.Schema(type=types.Type.NUMBER),
+        "confidence": types.Schema(type=types.Type.NUMBER),
+        "reasoning": types.Schema(type=types.Type.STRING),
+    },
+    required=["score", "confidence", "reasoning"]
+)
 
 # Statikus kontextus és specifikáció beolvasása (csak egyszer fut le)
 with open("context.md", "r", encoding="utf-8") as f:
@@ -140,22 +156,24 @@ with open("specification.md", "r", encoding="utf-8") as f:
 system_prompt = f"{context_text}\n\n{spec_text}"
 
 # 2. Az Ágens-hurok (The Agent Loop)
-messages = [
-    types.Content(
-        role="user",
-        parts=[
-            types.Part(text="Project context: " + context_text),
-            types.Part(text=spec_text),
-        ],
-    )
-]
-
-def agent_loop(system_prompt, tool_config, current_question, rules, answer_text):
+def agent_loop(system_prompt, tool_config, current_question, rules, answer_text, maximum_attenpts=20):
     """
     This is the main loop of the agent. 
     It continuously interacts with the model, processes its responses, and executes tools as needed.
     """
+
+    messages = [
+        types.Content(
+            role="user",
+            parts=[
+                types.Part(text="Project context: " + context_text),
+                types.Part(text=spec_text),
+            ],
+        )
+    ]
+
     attempts = 0
+
     while True:
         # Meghívjuk a modellt, és átadjuk neki a futtatható függvényeket
         try:
@@ -163,25 +181,25 @@ def agent_loop(system_prompt, tool_config, current_question, rules, answer_text)
                 model='gemini-3.5-flash',
                 contents=messages,
                     config=types.GenerateContentConfig(
-                        system_instruction=(
-                            "You are an automated development agent. "
-                            "Specifications: " + system_prompt + "\n"
-                        ),
-                        tools=[tool_config]
+                        system_instruction=system_prompt,
+                        tools=[tool_config],
+                        response_mime_type="application/json",
+                        response_schema=final_output_schema,
+                        temperature=0.1
                     )
             )
             attempts = 0
         except Exception as e:
-            logger.exception("[ERROR]\tHiba történt - %s/20", attempts)
+            logger.exception("[ERROR]\tException during model call \t%s/%s", attempts, maximum_attenpts)
             attempts += 1
-            if attempts >= 20:
-                logger.error("[ERROR]\tTúl sok hiba történt, kilépés.")
+            if attempts >= maximum_attenpts:
+                logger.error("[ERROR]\tToo many failed attempts, exiting from agent loop.")
                 break
             continue
 
         # Ha a modell válaszolni akar a felhasználónak (vége a feladatnak)
         if response.text:
-            logger.info("[INFO]\tÁgens válasza: %s", response.text)
+            logger.info("[INFO]\tAgent's answer: %s", response.text)
             break
             
         # Ha a modell egy eszközt (Function Call) akar meghívni
@@ -194,7 +212,7 @@ def agent_loop(system_prompt, tool_config, current_question, rules, answer_text)
                 tool_name = call.name
                 args = call.args
                 
-                logger.info("[*] Az ágens meg akarja hívni a következőt: %s paraméterekkel: %s", tool_name, args)
+                logger.info("[*]\tAgent tool-call: %s\t with args: %s", tool_name, args)
 
                 # Dinamikusan lefuttatjuk a valós Python függvényt
                 if tool_name == "range_and_type_checker":
@@ -202,9 +220,9 @@ def agent_loop(system_prompt, tool_config, current_question, rules, answer_text)
                 elif tool_name == "confidentality_enhance":
                     result = confidentality_enhance(**args)
                 else:
-                    result = f"Ismeretlen eszköz: {tool_name}"
+                    result = f"Unknown tool: {tool_name}"
 
-                logger.info("[INFO]\t[%s] eredmény: %s", tool_name, result)
+                logger.info("[INFO]\t[%s] result:\t%s", tool_name, result)
                     
                 # A futási eredményt (visszajelzést) visszacsatoljuk a modellnek
                 messages.append(
@@ -221,15 +239,26 @@ def agent_loop(system_prompt, tool_config, current_question, rules, answer_text)
 
 ############### Orchestration ########################
 if __name__ == "__main__":
-    tmp = load_the_CSV()
-    if tmp is None:
-        logger.error("[ERROR]\tNo CSV file to process. Exiting.")
-        raise SystemExit(1)
-    df = pd.read_csv(tmp)
+    # API key
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        api_key = try_load_api_key_from_key_file()
 
+    if not api_key:
+        logger.error('[FATAL ERROR]\tGEMINI_API_KEY is not set. Stopping program. \nPlease set the environment variable and try again: $env:GEMINI_API_KEY="YOUR_API_KEY_HERE"\n or set it in a .key file in the current directory.')
+        raise SystemExit(1)
+
+    client = genai.Client(api_key=api_key)
+
+    # Input data beolvasása
+    df = load_the_CSV()
+    if df is None:
+        logger.error("[FATAL ERROR]\tNo CSV file to process. Exiting.")
+        raise SystemExit(1)
+    
     scoring_rules = load_the_JSON()
     if scoring_rules is None:
-        logger.error("[ERROR]\tNo JSON rule file to process. Exiting.")
+        logger.error("[FATAL ERROR]\tNo JSON rule file to process. Exiting.")
         raise SystemExit(1)
     
     results_list = []
@@ -238,25 +267,27 @@ if __name__ == "__main__":
         print(f"[{index+1}/{len(df)}] Row processing... ")
         
         # Kérdés és szabály kinyerése
-        current_question = "question #1"
-        rules = scoring_rules["questions"][0][current_question]
-        answer_text = row[current_question]
-        
-        # Ágens meghívása
-        final_evaluation = agent_loop(
-            system_prompt=system_prompt,
-            tool_config=tool_config,
-            current_question=current_question,
-            rules=rules,
-            answer_text=answer_text
-        )
-        
-        # Eredmény elmentése a memóriába (később CSV-be íráshoz)
-        results_list.append({
-            "original_answer": answer_text,
-            "evaluation": final_evaluation # Ide ideálisan egy JSON string érkezik
-        })
+        for current_question in scoring_rules["questions"][0].keys():
+            rules = scoring_rules["questions"][0][current_question]
+            answer_text = row[current_question]
+            
+            # Ágens meghívása
+            final_evaluation = agent_loop(
+                system_prompt=system_prompt,
+                tool_config=tool_config,
+                current_question=current_question,
+                rules=rules,
+                answer_text=answer_text,
+                maximum_attenpts=20
+            )
+            
+            # Eredmény elmentése a memóriába (később CSV-be íráshoz)
+            results_list.append({
+                "original_answer": answer_text,
+                "evaluation": final_evaluation
+            })
 
     # Mentés új CSV-be
+    
     result_df = pd.DataFrame(results_list)
     result_df.to_csv("scored_answers.csv", index=False)
