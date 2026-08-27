@@ -162,12 +162,13 @@ def agent_loop(system_prompt, tool_config, current_question, rules, answer_text,
     It continuously interacts with the model, processes its responses, and executes tools as needed.
     """
 
+    user_prompt = f"Question: {current_question}\nRules: {rules}\nAnswer to evaluate: {answer_text}"
+    
     messages = [
         types.Content(
             role="user",
             parts=[
-                types.Part(text="Project context: " + context_text),
-                types.Part(text=spec_text),
+                types.Part.from_text(text=user_prompt)
             ],
         )
     ]
@@ -194,13 +195,13 @@ def agent_loop(system_prompt, tool_config, current_question, rules, answer_text,
             attempts += 1
             if attempts >= maximum_attenpts:
                 logger.error("[ERROR]\tToo many failed attempts, exiting from agent loop.")
-                break
+                return None
             continue
 
         # Ha a modell válaszolni akar a felhasználónak (vége a feladatnak)
         if response.text:
             logger.info("[INFO]\tAgent's answer: %s", response.text)
-            break
+            return response.text # Vissza kell adni az eredményt a főprogramnak
             
         # Ha a modell egy eszközt (Function Call) akar meghívni
         if response.function_calls:
@@ -216,7 +217,8 @@ def agent_loop(system_prompt, tool_config, current_question, rules, answer_text,
 
                 # Dinamikusan lefuttatjuk a valós Python függvényt
                 if tool_name == "range_and_type_checker":
-                    result = range_and_type_checker(**args)
+                    range_min = rules[1]; range_max = rules[2]
+                    result = range_and_type_checker(**args, range_min=range_min, range_max=range_max)
                 elif tool_name == "confidentality_enhance":
                     result = confidentality_enhance(**args)
                 else:
@@ -260,13 +262,18 @@ if __name__ == "__main__":
     if scoring_rules is None:
         logger.error("[FATAL ERROR]\tNo JSON rule file to process. Exiting.")
         raise SystemExit(1)
-    
+    rules_dict = {}
+    for q_obj in scoring_rules["questions"]:
+        for question_key, rule_data in q_obj.items():
+            rules_dict[question_key] = rule_data
+
     results_list = []
 
+    """"
     for index, row in df.iterrows():
         print(f"[{index+1}/{len(df)}] Row processing... ")
         
-        # Kérdés és szabály kinyerése
+        # Szabály kinyerése
         for current_question in scoring_rules["questions"][0].keys():
             rules = scoring_rules["questions"][0][current_question]
             answer_text = row[current_question]
@@ -280,7 +287,7 @@ if __name__ == "__main__":
                 answer_text=answer_text,
                 maximum_attenpts=20
             )
-            
+    """"        
             # Eredmény elmentése a memóriába (később CSV-be íráshoz)
             results_list.append({
                 "original_answer": answer_text,
