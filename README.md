@@ -90,7 +90,7 @@ __________________________________________________________________
 
 ## About the script
 
-```Mermaid
+```mermaid
 flowchart TD
     Start([Start the script]) --> Load[Answers CSV and scoring method JSON]
     
