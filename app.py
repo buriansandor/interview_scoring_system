@@ -156,7 +156,7 @@ with open("specification.md", "r", encoding="utf-8") as f:
 system_prompt = f"{context_text}\n\n{spec_text}"
 
 # 2. Az Ágens-hurok (The Agent Loop)
-def agent_loop(system_prompt, tool_config, current_question, rules, answer_text, maximum_attenpts=20):
+def agent_loop(llm_model, system_prompt, tool_config, current_question, rules, range_min, range_max, answer_text, maximum_attenpts=20):
     """
     This is the main loop of the agent. 
     It continuously interacts with the model, processes its responses, and executes tools as needed.
@@ -179,7 +179,7 @@ def agent_loop(system_prompt, tool_config, current_question, rules, answer_text,
         # Meghívjuk a modellt, és átadjuk neki a futtatható függvényeket
         try:
             response = client.models.generate_content(
-                model='gemini-3.5-flash',
+                model=llm_model,
                 contents=messages,
                     config=types.GenerateContentConfig(
                         system_instruction=system_prompt,
@@ -217,7 +217,6 @@ def agent_loop(system_prompt, tool_config, current_question, rules, answer_text,
 
                 # Dinamikusan lefuttatjuk a valós Python függvényt
                 if tool_name == "range_and_type_checker":
-                    range_min = rules[1]; range_max = rules[2]
                     result = range_and_type_checker(**args, range_min=range_min, range_max=range_max)
                 elif tool_name == "confidentality_enhance":
                     result = confidentality_enhance(**args)
@@ -254,7 +253,7 @@ if __name__ == "__main__":
 
     # Input data beolvasása
     df = load_the_CSV()
-    if df is None:
+    if df is None or df.empty:
         logger.error("[FATAL ERROR]\tNo CSV file to process. Exiting.")
         raise SystemExit(1)
     
@@ -269,6 +268,7 @@ if __name__ == "__main__":
 
     results_list = []
     maximum_attenpts = 20 # set this higher for more attempts in case of model errors, but it will take longer to process the CSV file.
+    llm_models = ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-1.5-flash'] # choose your preferred llm model
 
     for index, row in df.iterrows():
         print(f"[{index+1}/{len(df)}]\tRow processing... ")
@@ -286,10 +286,13 @@ if __name__ == "__main__":
                     continue
                 # Ágens meghívása
                 final_evaluation = agent_loop(
+                    llm_model=llm_models[0],  # You can change the model here if needed
                     system_prompt=system_prompt,
                     tool_config=tool_config,
                     current_question=question_column,
                     rules=scoring_method,
+                    range_min=range_min,
+                    range_max=range_max,
                     answer_text=answer_text,
                     maximum_attenpts=maximum_attenpts
                 )
@@ -304,12 +307,6 @@ if __name__ == "__main__":
                         "original_answer": answer_text,
                         "evaluation": final_evaluation
                     })
-
-                # Eredmény elmentése a memóriába (később CSV-be íráshoz)
-                results_list.append({
-                    "original_answer": answer_text,
-                    "evaluation": final_evaluation
-                })
             else:
                 logger.warning("[WARNING]\tRow %d, Question '%s' is not defined in the JSON rules. Skipping.", index + 1, question_column)
                 continue
