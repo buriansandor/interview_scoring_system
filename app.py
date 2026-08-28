@@ -259,6 +259,7 @@ if __name__ == "__main__":
     if df is None or df.empty:
         logger.error("[FATAL ERROR]\tNo CSV file to process. Exiting.")
         raise SystemExit(1)
+    df.columns = [str(col).strip(' "') for col in df.columns]
     
     scoring_rules = load_the_JSON()
     if scoring_rules is None:
@@ -269,17 +270,6 @@ if __name__ == "__main__":
         for question_key, rule_data in q_obj.items():
             rules_dict[question_key] = rule_data
 
-    valid_columns = []
-    for col in df.columns:
-        if col in rules_dict:
-            valid_columns.append(col)
-        else:
-            logger.warning("[WARNING]\tColumn '%s' is not defined in the JSON rules. It will be skipped completely.", col)
-
-    if not valid_columns:
-        logger.error("[FATAL ERROR]\tNone of the CSV columns match the JSON rules. Exiting.")
-        raise SystemExit(1)
-
     results_list = []
     maximum_attenpts = 20 # set this higher for more attempts in case of model errors, but it will take longer to process the CSV file.
     llm_models = ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-1.5-flash'] # choose your preferred llm model
@@ -288,7 +278,7 @@ if __name__ == "__main__":
     for position, (index, row) in enumerate(df.iterrows(), start=1):
         print(f"[{position}/{len(df)}]\tRow processing...")
 
-        for question_column in valid_columns:
+        for question_column in df.columns:
             if question_column in rules_dict:
                 rule_list = rules_dict[question_column]
                 scoring_method = rule_list[0]
@@ -297,11 +287,11 @@ if __name__ == "__main__":
 
                 answer_text = row.get(question_column, "")
                 if pd.isna(answer_text) or str(answer_text).strip() == "":
-                    logger.warning("[WARNING]\tRow %d, Question '%s' has no answer. Skipping.", index + 1, question_column)
+                    logger.warning("[WARNING]\tRow %d, Question '%s' has no answer. Skipping.", position + 1, question_column)
                     continue
 
                 safe_answer_text = security.main_security_sanitization(str(answer_text))
-
+                
                 # Ágens meghívása
                 final_evaluation = agent_loop(
                     llm_model=llm_models[0],  # You can change the model here if needed
@@ -316,16 +306,16 @@ if __name__ == "__main__":
                 )
 
                 if final_evaluation is None:
-                    logger.error("[ERROR]\tRow %d, Question '%s': Agent failed to provide a valid evaluation after %d attempts. Skipping.", index + 1, question_column, maximum_attenpts)
+                    logger.error("[ERROR]\tRow %d, Question '%s': Agent failed to provide a valid evaluation after %d attempts. Skipping.", position + 1, question_column, maximum_attenpts)
                     continue
                 else:
                     # 1. A JSON string átalakítása Python szótárrá
                     try:
                         eval_data = json.loads(final_evaluation)
                     except json.JSONDecodeError as e:
-                        logger.error("[ERROR]\tRow %d, Question '%s': Failed to parse JSON response. Raw output: %s", index + 1, question_column, final_evaluation)
+                        logger.error("[ERROR]\tRow %d, Question '%s': Failed to parse JSON response. Raw output: %s", position + 1, question_column, final_evaluation)
                         results_list.append({
-                                                "respondent_row": index + 1,
+                                                "respondent_row": position + 1,
                                                 "question": question_column,
                                                 "original_answer": safe_answer_text,
                                                 "raw_evaluation": final_evaluation
@@ -334,7 +324,7 @@ if __name__ == "__main__":
 
                     # 2. A kinyert paraméterek külön kulcsokba (oszlopokba) mentése
                     results_list.append({
-                        "respondent_row": index + 1,
+                        "respondent_row": position + 1,
                         "question": question_column,
                         "original_answer": safe_answer_text,
                         "score": eval_data.get("score"),
@@ -342,7 +332,7 @@ if __name__ == "__main__":
                         "reasoning": eval_data.get("reasoning")
                     })
             else:
-                logger.warning("[WARNING]\tRow %d, Question '%s' is not defined in the JSON rules. Skipping.", index + 1, question_column)
+                logger.warning("[WARNING]\tRow %d, Question '%s' is not defined in the JSON rules. Skipping.", position + 1, question_column)
                 continue
 
 
