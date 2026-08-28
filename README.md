@@ -15,6 +15,11 @@ Requirements:
 ### 1. Activate Virtual Environment
 
 PowerShell:
+```
+py -m venv .venv; . .\.venv\Scripts\Activate.ps1
+```
+
+or
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
@@ -30,6 +35,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 ```powershell
 pip install google-genai
+pip install pandas
 ```
 
 ### 3. Set Environment Variable
