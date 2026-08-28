@@ -269,15 +269,26 @@ if __name__ == "__main__":
         for question_key, rule_data in q_obj.items():
             rules_dict[question_key] = rule_data
 
+    valid_columns = []
+    for col in df.columns:
+        if col in rules_dict:
+            valid_columns.append(col)
+        else:
+            logger.warning("[WARNING]\tColumn '%s' is not defined in the JSON rules. It will be skipped completely.", col)
+
+    if not valid_columns:
+        logger.error("[FATAL ERROR]\tNone of the CSV columns match the JSON rules. Exiting.")
+        raise SystemExit(1)
+
     results_list = []
     maximum_attenpts = 20 # set this higher for more attempts in case of model errors, but it will take longer to process the CSV file.
     llm_models = ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-1.5-flash'] # choose your preferred llm model
     output_file = "scored_answers.csv"
 
-    for index, row in df.iterrows():
-        print(f"[{index+1}/{len(df)}]\tRow processing... ")
+    for position, (index, row) in enumerate(df.iterrows(), start=1):
+        print(f"[{position}/{len(df)}]\tRow processing...")
 
-        for question_column in df.columns:
+        for question_column in valid_columns:
             if question_column in rules_dict:
                 rule_list = rules_dict[question_column]
                 scoring_method = rule_list[0]
