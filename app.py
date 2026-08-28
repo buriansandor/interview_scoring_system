@@ -69,7 +69,7 @@ def load_the_CSV():
     return pd.read_csv(csv_files[0])
 
 ############# Agent ########################
-# 1. Definiáljuk az eszközöket (Tools), amiket az ágens használhat
+# 1. Define the tools that the agent can use
 def range_and_type_checker(score: float, range_min: float = 0.0, range_max: float = 10.0) -> str:
     """
     If the agent provides a value outside the scale, this tool immediately forces the model to 
@@ -96,7 +96,7 @@ def confidentality_enhance(current_score: float, confidence: float, reasoning: s
     else:
         return f"[INFO] The model's confidence is sufficient ({confidence}); no Self-Refine loop needed. Reasoning: {reasoning}."
     
-# Biztonságos eszköztár regisztráció
+# Secure tool registration
 my_tools = [range_and_type_checker, confidentality_enhance]
 tool_config = types.Tool(
     function_declarations=[
@@ -131,7 +131,7 @@ tool_config = types.Tool(
     ]
 )
 
-# A végső kimenet sémája, amit a modellnek vissza kell adnia
+# The final output schema that the model must return
 final_output_schema = types.Schema(
     type=types.Type.OBJECT,
     properties={
@@ -142,17 +142,17 @@ final_output_schema = types.Schema(
     required=["score", "confidence", "reasoning"]
 )
 
-# Statikus kontextus és specifikáció beolvasása (csak egyszer fut le)
+# Load static context and specification (only runs once)
 with open("context.md", "r", encoding="utf-8") as f:
     context_text = f.read()
 
 with open("specification.md", "r", encoding="utf-8") as f:
     spec_text = f.read()
 
-# A System Prompt összeállítása a modell számára
+# Compose the System Prompt for the model
 system_prompt = f"{context_text}\n\n{spec_text}"
 
-# 2. Az Ágens-hurok (The Agent Loop)
+# 2. The Agent Loop
 def agent_loop(llm_model, system_prompt, tool_config, current_question, rules, range_min, range_max, answer_text, maximum_attenpts=20):
     """
     This is the main loop of the agent. 
@@ -173,7 +173,7 @@ def agent_loop(llm_model, system_prompt, tool_config, current_question, rules, r
     attempts = 0
 
     while True:
-        # Meghívjuk a modellt, és átadjuk neki a futtatható függvényeket
+        # Call the model and pass it the callable functions
         try:
             response = client.models.generate_content(
                 model=llm_model,
@@ -195,24 +195,24 @@ def agent_loop(llm_model, system_prompt, tool_config, current_question, rules, r
                 return None
             continue
 
-        # Ha a modell válaszolni akar a felhasználónak (vége a feladatnak)
+        # If the model wants to respond to the user (task is complete)
         if response.text:
             logger.info("[INFO]\tAgent's answer: %s", response.text)
-            return response.text # Vissza kell adni az eredményt a főprogramnak
+            return response.text # Must return the result to the main program
             
-        # Ha a modell egy eszközt (Function Call) akar meghívni
+        # If the model wants to call a tool (Function Call)
         if response.function_calls:
-            # A modell üzenetét csak egyszer adjuk a history-hoz, különben duplikálódik
-            # ha egy válaszban több function call is érkezik.
+            # Add the model's message to history only once to avoid duplication
+            # if multiple function calls arrive in one response
             messages.append(response.candidates[0].content)
             for call in response.function_calls:
-                # 3. Kód szinten elkapjuk a modell szándékát
+                # 3. Capture the model's intention at the code level
                 tool_name = call.name
                 args = call.args
                 
                 logger.info("[*]\tAgent tool-call: %s\t with args: %s", tool_name, args)
 
-                # Dinamikusan lefuttatjuk a valós Python függvényt
+                # Dynamically execute the actual Python function
                 if tool_name == "range_and_type_checker":
                     result = range_and_type_checker(**args, range_min=range_min, range_max=range_max)
                 elif tool_name == "confidentality_enhance":
@@ -222,7 +222,7 @@ def agent_loop(llm_model, system_prompt, tool_config, current_question, rules, r
 
                 logger.info("[INFO]\t[%s] result:\t%s", tool_name, result)
                     
-                # A futási eredményt (visszajelzést) visszacsatoljuk a modellnek
+                # Feed back the execution result (feedback) to the model
                 messages.append(
                     types.Content(
                         role="tool",
@@ -254,13 +254,13 @@ if __name__ == "__main__":
 
     client = genai.Client(api_key=api_key)
 
-    # Input data beolvasása
+    # Load input data
     df = load_the_CSV()
     if df is None or df.empty:
         logger.error("[FATAL ERROR]\tNo CSV file to process. Exiting.")
         raise SystemExit(1)
     df.columns = [str(col).strip(' "') for col in df.columns]
-    
+
     scoring_rules = load_the_JSON()
     if scoring_rules is None:
         logger.error("[FATAL ERROR]\tNo JSON rule file to process. Exiting.")
@@ -271,8 +271,8 @@ if __name__ == "__main__":
             rules_dict[question_key] = rule_data
 
     results_list = []
-    maximum_attenpts = 20 # set this higher for more attempts in case of model errors, but it will take longer to process the CSV file.
-    llm_models = ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-1.5-flash'] # choose your preferred llm model
+    maximum_attenpts = 20  # set this higher for more attempts in case of model errors, but it will take longer to process the CSV file
+    llm_models = ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-1.5-flash']  # choose your preferred llm model
     output_file = "scored_answers.csv"
 
     for position, (index, row) in enumerate(df.iterrows(), start=1):
@@ -292,7 +292,7 @@ if __name__ == "__main__":
 
                 safe_answer_text = security.main_security_sanitization(str(answer_text))
                 
-                # Ágens meghívása
+                # Call the agent
                 final_evaluation = agent_loop(
                     llm_model=llm_models[0],  # You can change the model here if needed
                     system_prompt=system_prompt,
@@ -309,7 +309,7 @@ if __name__ == "__main__":
                     logger.error("[ERROR]\tRow %d, Question '%s': Agent failed to provide a valid evaluation after %d attempts. Skipping.", position + 1, question_column, maximum_attenpts)
                     continue
                 else:
-                    # 1. A JSON string átalakítása Python szótárrá
+                    # 1. Convert the JSON string to a Python dictionary
                     try:
                         eval_data = json.loads(final_evaluation)
                     except json.JSONDecodeError as e:
@@ -322,7 +322,7 @@ if __name__ == "__main__":
                                             })
                         continue
 
-                    # 2. A kinyert paraméterek külön kulcsokba (oszlopokba) mentése
+                    # 2. Save the extracted parameters to separate keys (columns)
                     results_list.append({
                         "respondent_row": position + 1,
                         "question": question_column,
@@ -336,7 +336,7 @@ if __name__ == "__main__":
                 continue
 
 
-    # Mentés új CSV-be    
+    # Save to new CSV    
     result_df = pd.DataFrame(results_list)
     result_df.to_csv(output_file, index=False)
     logger.info("[SYSTEM]\tResults saved to '%s'", output_file)
