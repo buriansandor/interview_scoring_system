@@ -284,6 +284,9 @@ if __name__ == "__main__":
                 if pd.isna(answer_text) or str(answer_text).strip() == "":
                     logger.warning("[WARNING]\tRow %d, Question '%s' has no answer. Skipping.", index + 1, question_column)
                     continue
+
+                safe_answer_text = security.main_security_sanitization(str(answer_text))
+
                 # Ágens meghívása
                 final_evaluation = agent_loop(
                     llm_model=llm_models[0],  # You can change the model here if needed
@@ -293,7 +296,7 @@ if __name__ == "__main__":
                     rules=scoring_method,
                     range_min=range_min,
                     range_max=range_max,
-                    answer_text=answer_text,
+                    answer_text=safe_answer_text,
                     maximum_attenpts=maximum_attenpts
                 )
 
@@ -301,11 +304,27 @@ if __name__ == "__main__":
                     logger.error("[ERROR]\tRow %d, Question '%s': Agent failed to provide a valid evaluation after %d attempts. Skipping.", index + 1, question_column, maximum_attenpts)
                     continue
                 else:
+                    # 1. A JSON string átalakítása Python szótárrá
+                    try:
+                        eval_data = json.loads(final_evaluation)
+                    except json.JSONDecodeError as e:
+                        logger.error("[ERROR]\tRow %d, Question '%s': Failed to parse JSON response. Raw output: %s", index + 1, question_column, final_evaluation)
+                        results_list.append({
+                                                "respondent_row": index + 1,
+                                                "question": question_column,
+                                                "original_answer": safe_answer_text,
+                                                "raw_evaluation": final_evaluation
+                                            })
+                        continue
+
+                    # 2. A kinyert paraméterek külön kulcsokba (oszlopokba) mentése
                     results_list.append({
                         "respondent_row": index + 1,
                         "question": question_column,
-                        "original_answer": answer_text,
-                        "evaluation": final_evaluation
+                        "original_answer": safe_answer_text,
+                        "score": eval_data.get("score"),
+                        "confidence": eval_data.get("confidence"),
+                        "reasoning": eval_data.get("reasoning")
                     })
             else:
                 logger.warning("[WARNING]\tRow %d, Question '%s' is not defined in the JSON rules. Skipping.", index + 1, question_column)
