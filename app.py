@@ -268,33 +268,53 @@ if __name__ == "__main__":
             rules_dict[question_key] = rule_data
 
     results_list = []
+    maximum_attenpts = 20 # set this higher for more attempts in case of model errors, but it will take longer to process the CSV file.
 
-    """"
     for index, row in df.iterrows():
-        print(f"[{index+1}/{len(df)}] Row processing... ")
-        
-        # Szabály kinyerése
-        for current_question in scoring_rules["questions"][0].keys():
-            rules = scoring_rules["questions"][0][current_question]
-            answer_text = row[current_question]
-            
-            # Ágens meghívása
-            final_evaluation = agent_loop(
-                system_prompt=system_prompt,
-                tool_config=tool_config,
-                current_question=current_question,
-                rules=rules,
-                answer_text=answer_text,
-                maximum_attenpts=20
-            )
-    """"        
-            # Eredmény elmentése a memóriába (később CSV-be íráshoz)
-            results_list.append({
-                "original_answer": answer_text,
-                "evaluation": final_evaluation
-            })
+        print(f"[{index+1}/{len(df)}]\tRow processing... ")
 
-    # Mentés új CSV-be
-    
+        for question_column in df.columns:
+            if question_column in rules_dict:
+                rule_list = rules_dict[question_column]
+                scoring_method = rule_list[0]
+                range_min = rule_list[1]
+                range_max = rule_list[2]
+
+                answer_text = row.get(question_column, "")
+                if pd.isna(answer_text) or str(answer_text).strip() == "":
+                    logger.warning("[WARNING]\tRow %d, Question '%s' has no answer. Skipping.", index + 1, question_column)
+                    continue
+                # Ágens meghívása
+                final_evaluation = agent_loop(
+                    system_prompt=system_prompt,
+                    tool_config=tool_config,
+                    current_question=question_column,
+                    rules=scoring_method,
+                    answer_text=answer_text,
+                    maximum_attenpts=maximum_attenpts
+                )
+
+                if final_evaluation is None:
+                    logger.error("[ERROR]\tRow %d, Question '%s': Agent failed to provide a valid evaluation after %d attempts. Skipping.", index + 1, question_column, maximum_attenpts)
+                    continue
+                else:
+                    results_list.append({
+                        "respondent_row": index + 1,
+                        "question": question_column,
+                        "original_answer": answer_text,
+                        "evaluation": final_evaluation
+                    })
+
+                # Eredmény elmentése a memóriába (később CSV-be íráshoz)
+                results_list.append({
+                    "original_answer": answer_text,
+                    "evaluation": final_evaluation
+                })
+            else:
+                logger.warning("[WARNING]\tRow %d, Question '%s' is not defined in the JSON rules. Skipping.", index + 1, question_column)
+                continue
+
+
+    # Mentés új CSV-be    
     result_df = pd.DataFrame(results_list)
     result_df.to_csv("scored_answers.csv", index=False)
