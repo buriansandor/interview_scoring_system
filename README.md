@@ -82,16 +82,15 @@ Example input can be the [evaluation.json](evaluation.json) and the [test.csv](t
 ## The output
 
 The output by default is `scored_answers.csv` and `agent.log`. The structure of the output:
-````
+```
 respondent_row,question,original_answer,score,confidence,reasoning
-````
+```
 
 __________________________________________________________________
 
 ## About the script
 
-````Mermaid
-
+```Mermaid
 flowchart TD
     Start([Start the script]) --> Load[Answers CSV and scoring method JSON]
     
@@ -125,8 +124,7 @@ flowchart TD
     class RowLoop,QLoop loop;
     class AgentCall,OutputObject agent;
     class RangeCheck,ConfidenceCheck,EnhanceTool,RangeError tool;
-
-````
+```
 
 The LLM is a Gemini-based by default.
 
