@@ -1,0 +1,49 @@
+{
+    "questions": 
+    [
+        {"how do you feel today?": [
+            "Evaluate the answer on a scale of 1 to 5, where 1 is very negative and 5 is very positive. Provide a score and a brief explanation for the score.",
+            1, 5]
+        },
+        {
+            "how hard is your occupation?": [
+                "Evaluate the answer on a scale of 1 to 5, where 1 is very easy and 5 is very hard. Try to get the real meaning behind the answer. Provide a score and a brief explanation for the score.",
+                1, 5]
+        },
+        {
+            "can you describe your work environment?": [
+                "Evaluate the answer on a scale of 1 to 5, where 1 is very negative and 5 is very positive. evaluate based on the average work environments in the same job type. Provide a score and a brief explanation for the score.",
+                1, 5]
+        },
+        {
+            "what are the main challenges you face in your job?": [
+                "Evaluate the answer on a scale of 1 to 10, where 1 is very easy and 10 is very hard. try to get the  Provide a score and a brief explanation for the score.",
+                1.0, 10.0]
+        },
+        {
+            "what motivates you to perform well in your role?": [
+                "Evaluate the answer on a scale of 1 to 5, where 1 is very negative and 5 is very positive. Give a higher value if the answer is more positive, ans specific. Provide a score and a brief explanation for the score.",
+                1.0, 5.0]
+        },
+        {
+            "can you share a recent success story from your job?": [
+                "Evaluate the answer on a scale of 1 to 5, where 1 is very negative and 5 is very positive. Give a higher value if the answer is more positive, specific, and demonstrates impact. Provide a score and a brief explanation for the score.",
+                1.0, 5.0]
+        },
+        {
+            "how do you balance work and personal life?": [
+                "Evaluate the answer on a scale of 1 to 5, where 1 is very negative and 5 is very positive. Give a higher value if the answer is more family centric. Provide a score and a brief explanation for the score.",
+                1.0, 5.0]
+        },
+        {
+            "what skills are essential for your occupation?": [
+                "Evaluate the answer on a scale of 1 to 5, where 1 is very negative and 5 is very positive. Give a higher value if the answer is more specific and demonstrates a clear understanding of the skills required for the job. Provide a score and a brief explanation for the score.",
+                1.0, 5.0]
+        },
+        {
+            "how do you see your career progressing in the next few years?": [
+                "Evaluate the answer on a scale of 1 to 5, where 1 is very negative and 5 is very positive. Give a higher value if the answer is more specific and demonstrates a clear understanding of the career progression. Provide a score and a brief explanation for the score.",
+                1.0, 5.0]
+        }
+    ]
+}

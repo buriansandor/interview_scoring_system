@@ -77,6 +77,15 @@ Example structure of the JSON file:
 
 The input can be set next to the script in the same folder, or if the script won't see it, then it will ask for it in the terminal.
 
+Example input can be the [evaluation.json](evaluation.json) and the [test.csv](test.csv).
+
+## The output
+
+The output by default is `scored_answers.csv` and `agent.log`. The structure of the output:
+````
+respondent_row,question,original_answer,score,confidence,reasoning
+````
+
 __________________________________________________________________
 
 ## About the script
