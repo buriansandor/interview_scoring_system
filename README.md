@@ -32,6 +32,11 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 ```
 
 ### 2. Install Dependencies
+```shell
+pip install -r requirements.txt
+```
+
+or manually
 
 ```powershell
 pip install google-genai

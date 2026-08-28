@@ -23,9 +23,6 @@ if not logger.handlers:
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
 
-startup_cwd = Path.cwd().resolve()
-logger.info("[INFO]\tStartup working directory: %s", startup_cwd)
-
 def try_load_api_key_from_key_file() -> str:
     """
     Find the .key file and set the GEMINI API key based on the content of the file.
@@ -240,6 +237,12 @@ def agent_loop(llm_model, system_prompt, tool_config, current_question, rules, r
 
 ############### Orchestration ########################
 if __name__ == "__main__":
+    logger.info("[SYSTEM]\tStarting the Interview Scoring System...")
+
+    # Startup working directory
+    startup_cwd = Path.cwd().resolve()
+    logger.info("[INFO]\tStartup working directory: %s", startup_cwd)
+
     # API key
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
@@ -269,6 +272,7 @@ if __name__ == "__main__":
     results_list = []
     maximum_attenpts = 20 # set this higher for more attempts in case of model errors, but it will take longer to process the CSV file.
     llm_models = ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-1.5-flash'] # choose your preferred llm model
+    output_file = "scored_answers.csv"
 
     for index, row in df.iterrows():
         print(f"[{index+1}/{len(df)}]\tRow processing... ")
@@ -333,4 +337,6 @@ if __name__ == "__main__":
 
     # Mentés új CSV-be    
     result_df = pd.DataFrame(results_list)
-    result_df.to_csv("scored_answers.csv", index=False)
+    result_df.to_csv(output_file, index=False)
+    logger.info("[SYSTEM]\tResults saved to '%s'", output_file)
+    logger.info("[SYSTEM]\tExecution completed successfully.")
