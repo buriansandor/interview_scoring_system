@@ -1,4 +1,7 @@
-# Interview answer scoring system
+<center><h1>Interview answer scoring system</h1></center>
+
+Run: [![Google Colab Badge](https://img.shields.io/badge/Google%20Colab-F9AB00?logo=googlecolab&logoColor=fff&style=for-the-badge)](https://colab.research.google.com/drive/14IeH65N0BbDL8qD5Nu2EGbcxqJCUIz4S?usp=sharing) [![Kaggle Badge](https://img.shields.io/badge/Kaggle-20BEFF?logo=kaggle&logoColor=fff&style=for-the-badge)](https://www.kaggle.com/code/sndorburian/interview-answer-scoring-system)
+
 This is a tool to give score values to text-based answers from interviews. This is useful in the evaluation of surveys.
 
 The goal of this scirpt is to make it possible to evaluate several answers with statistical methods, converting the text to numeric values in specidic ranges.
