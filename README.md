@@ -6,7 +6,7 @@ This is a tool to give score values to text-based answers from interviews. This 
 
 The goal of this scirpt is to make it possible to evaluate several answers with statistical methods, converting the text to numeric values in specidic ranges.
 
-
+> *This as a more reliable, deterministic methodology to turn text-based answers scores, numeric values. The core idea is to set a prompt to each question, how the questions can be evaluated, and send this evaluation method, with the question and the given answer to an LLM, to turn the answer to a numeric value in a specific range. The LLM should give back the score, a reason why this is a good score, and a confidence value. If the confidence value is low, then we have to send the question to the LLM again, but now we have to send the given score, the confidence, and the reason, asking the LLM to rethink the given value with a higher confidence. We will do this until the confidence is high enough, then we accept the values.*
 
 ## How-to
 
