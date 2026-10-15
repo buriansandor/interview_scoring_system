@@ -209,8 +209,22 @@ nem kapcsol be egy másik, esetleg fizetős szolgáltatót.
 ## Tesztelés és korlátok
 
 ```shell
+python -m pip install -r requirements-dev.txt
 python -m unittest discover -s tests -v
 ```
+
+A `.github/workflows/tests.yml` minden branchre és tagre történő push,
+valamint új/frissített/újranyitott/ellenőrzésre kész PR esetén elindítja
+ugyanezeket a teszteket. Python 3.11, 3.12, 3.13 és 3.14 alatt ellenőrzi
+a függőségeket, a notebookok formátumát és a tesztcsomagot.
+Nem kell hozzá API-kulcs, és nem indít éles LLM-hívást.
+
+Egy push több commitot is tartalmazhat; ilyenkor a push végállapota kap
+tesztfutást. A lokálisan létrehozott, még fel nem töltött commitok nem
+indíthatnak GitHub Actions-t. A push és a PR külön futást kap, és az új
+push nem szakítja meg automatikusan a korábbit. A merge kötelező
+teszteredményhez kötése külön branch-protection beállítás, ezt nem
+módosítjuk automatikusan.
 
 A tesztek konfigurációt, kulcsválasztást, validálást, híváskeretet,
 ütemezést, HTTP-kéréseket és a teljes CSV-feldolgozást vizsgálnak.

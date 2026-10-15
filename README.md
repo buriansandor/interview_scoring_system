@@ -225,6 +225,38 @@ Server protocol references:
 [llama.cpp server documentation](https://github.com/ggml-org/llama.cpp/tree/master/tools/server)
 and [Ollama OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility).
 
+## Automated tests and GitHub Actions
+
+The `Tests` workflow in `.github/workflows/tests.yml` runs on:
+
+- **Push:** every branch and tag, without branch or file-path filters.
+- **Pull request:** opening, new commits, reopening, and marking ready for review.
+- **Manual dispatch:** from the Actions tab once the workflow is on the default branch.
+
+Each run checks Python 3.11, 3.12, 3.13, and 3.14 on Ubuntu. It installs
+`requirements-dev.txt`, checks dependency compatibility, validates the notebook
+schemas, and runs all unit/integration tests. No provider secrets, live LLM API
+calls, or downloaded model weights are needed. Notebook setup cells that would
+clone/install packages are not executed by the notebook integration tests.
+
+PR and push events intentionally have separate runs. Older runs and remaining
+Python versions are not automatically canceled when a newer push arrives or
+another version fails. A push containing several commits tests the final pushed
+revision; unpushed local commits cannot trigger GitHub Actions.
+
+The workflow uses a read-only repository token, does not persist checkout
+credentials, and pins third-party actions to commit SHAs. It uses `pull_request`,
+not the privileged `pull_request_target` event. No branch-protection settings are
+changed; making tests mandatory for merging is a separate repository setting.
+
+Run the same test suite locally:
+
+```shell
+python -m pip install -r requirements-dev.txt
+python -m pip check
+python -m unittest discover -s tests -v
+```
+
 ## Input
 1. Survey answer dataset as `csv`
 2. The scoring method as a `json`
