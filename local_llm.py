@@ -5,7 +5,7 @@ import logging
 import math
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
@@ -28,12 +28,16 @@ OUTPUT_SCHEMA = {
 class LocalLLMConfig:
     base_url: str = "http://127.0.0.1:8080/v1"
     model: str = "interview-scorer"
-    api_key: str = ""
+    api_key: str = field(default="", repr=False)
     timeout: float = 120
     max_tokens: int = 512
     max_attempts: int = 3
     max_reflections: int = 1
     json_mode: str = "json_object"
+    provider: str = "local"
+    temperature: float = 0.1
+    requests_per_minute: float = 0
+    max_requests_per_run: int = 0
 
     def __post_init__(self):
         url = urlsplit(self.base_url)
@@ -54,6 +58,18 @@ class LocalLLMConfig:
             raise ValueError("Invalid local token, attempt, or reflection limit.")
         if self.json_mode not in {"none", "json_object", "json_schema"}:
             raise ValueError("LOCAL_LLM_JSON_MODE must be none, json_object, or json_schema.")
+        if self.provider not in {"local", "gemini", "mistral_free", "groq_free", "openrouter"}:
+            raise ValueError("Unknown LLM provider.")
+        if not math.isfinite(self.temperature) or not 0 <= self.temperature <= 2:
+            raise ValueError("temperature must be between 0 and 2.")
+        if not math.isfinite(self.requests_per_minute) or self.requests_per_minute < 0:
+            raise ValueError("requests_per_minute must be finite and nonnegative.")
+        if self.max_requests_per_run < 0:
+            raise ValueError("max_requests_per_run must be nonnegative.")
+        if self.provider == "openrouter" and not (
+            self.model == "openrouter/free" or self.model.endswith(":free")
+        ):
+            raise ValueError("OpenRouter only accepts openrouter/free or a :free model.")
 
     @classmethod
     def from_env(cls):
@@ -98,17 +114,33 @@ class _NoRedirect(HTTPRedirectHandler):
         return None
 
 
+class RequestBudgetExceeded(RuntimeError):
+    """Stop instead of changing provider or bypassing a configured request cap."""
+
+
 class LocalLLMClient:
     def __init__(self, config):
         self.config = config
         # Local connections must not inherit an environment HTTP(S) proxy.
         self.opener = build_opener(ProxyHandler({}), _NoRedirect())
+        self.request_count = 0
+        self._last_request_at = None
+
+    def _before_request(self):
+        if self.config.max_requests_per_run and self.request_count >= self.config.max_requests_per_run:
+            raise RequestBudgetExceeded("Configured LLM request budget exhausted; no fallback attempted.")
+        if self.config.requests_per_minute and self._last_request_at is not None:
+            wait = 60 / self.config.requests_per_minute - (time.monotonic() - self._last_request_at)
+            if wait > 0:
+                time.sleep(wait)
+        self.request_count += 1
+        self._last_request_at = time.monotonic()
 
     def complete(self, messages):
         payload = {
             "model": self.config.model,
             "messages": messages,
-            "temperature": 0.1,
+            "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
             "stream": False,
         }
@@ -123,6 +155,11 @@ class LocalLLMClient:
                     "schema": OUTPUT_SCHEMA,
                 },
             }
+        if self.config.provider == "openrouter":
+            payload["provider"] = {
+                "max_price": {"prompt": 0, "completion": 0},
+                "allow_fallbacks": False,
+            }
         headers = {"Content-Type": "application/json"}
         if self.config.api_key:
             headers["Authorization"] = f"Bearer {self.config.api_key}"
@@ -132,20 +169,21 @@ class LocalLLMClient:
             headers=headers,
             method="POST",
         )
+        self._before_request()
         with self.opener.open(request, timeout=self.config.timeout) as response:
             result = json.load(response)
         message = result["choices"][0]["message"]
         if message.get("tool_calls"):
-            raise ValueError("Local mode expects final JSON, not tool calls.")
+            raise ValueError("Scoring expects final JSON, not tool calls.")
         content = message.get("content")
         if not isinstance(content, str) or not content.strip():
-            raise ValueError("The local server returned no text.")
+            raise ValueError("The LLM server returned no text.")
         return content
 
     def score(self, system_prompt, question, rules, range_min, range_max, answer):
         """Bounded retry/reflection loop; preserve uncertainty rather than inflate it."""
         override = (
-            "\n\nLOCAL BACKEND PROTOCOL (overrides earlier tool/iteration instructions): "
+            "\n\nSCORING BACKEND PROTOCOL (overrides earlier tool/iteration instructions): "
             "No tools are available to you. The application validates and manages retries. "
             "Return only a JSON object with score (number), confidence (number 0..1), "
             "and reasoning (nonempty string, at most two sentences). "
@@ -193,17 +231,17 @@ class LocalLLMClient:
                     continue
                 return json.dumps(evaluation, ensure_ascii=False)
             except HTTPError as error:
-                logger.error("Local LLM HTTP %s (attempt %s/%s).", error.code, attempt + 1, self.config.max_attempts)
+                logger.error("%s HTTP %s (attempt %s/%s).", self.config.provider, error.code, attempt + 1, self.config.max_attempts)
                 permanent = error.code != 429 and error.code < 500
                 error.close()
                 if permanent:
                     break
             except (URLError, TimeoutError, OSError, ValueError, KeyError, IndexError, TypeError):
-                logger.warning("Local LLM connection/response failure (attempt %s/%s).", attempt + 1, self.config.max_attempts)
+                logger.warning("%s connection/response failure (attempt %s/%s).", self.config.provider, attempt + 1, self.config.max_attempts)
             if attempt + 1 < self.config.max_attempts:
                 time.sleep(min(2 ** attempt, 8))
         if last_valid is not None:
-            logger.warning("Local re-evaluation failed; retaining the last validated, uncertain result.")
+            logger.warning("Re-evaluation failed; retaining the last validated, uncertain result.")
             return json.dumps(last_valid, ensure_ascii=False)
-        logger.error("Local evaluation failed. No cloud fallback was attempted.")
+        logger.error("Evaluation failed. No provider fallback was attempted.")
         return None

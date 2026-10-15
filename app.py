@@ -2,12 +2,15 @@ import os
 import json
 import logging
 import difflib
+import argparse
 from pathlib import Path
 import pandas as pd
 from google import genai
 from google.genai import types
 import security, guardrails
-from local_llm import LocalLLMClient, LocalLLMConfig
+from local_llm import RequestBudgetExceeded, validate_evaluation
+from llm_config import load_config
+from llm_providers import build_client
 
 logger = logging.getLogger("agent")
 logger.setLevel(logging.INFO)
@@ -44,29 +47,51 @@ def try_load_api_key_from_key_file() -> str:
             logger.warning("[WARNING]\tFailed to read %s: %s", key_file.name, e)
     return ""
 
-def load_the_JSON():
+def load_the_JSON(path=None, directory=None, excluded=None):
     """
     This function return the JSON object from the JSON file which is in this folder.
     """
-    json_rule_files = sorted(Path(".").glob("*.json"))
+    if path is not None:
+        with Path(path).open(encoding="utf-8-sig") as file:
+            data = json.load(file)
+        if not isinstance(data, dict) or not isinstance(data.get("questions"), list):
+            raise ValueError("The rules JSON must contain a questions list.")
+        return data
+    excluded = {Path(p).resolve() for p in (excluded or [])}
+    json_rule_files = []
+    for candidate in sorted(Path(directory or ".").glob("*.json")):
+        if candidate.resolve() in excluded or candidate.name.startswith("llm_config"):
+            continue
+        try:
+            with candidate.open(encoding="utf-8-sig") as file:
+                value = json.load(file)
+            if isinstance(value, dict) and isinstance(value.get("questions"), list):
+                json_rule_files.append(candidate)
+        except (OSError, ValueError):
+            continue
     if not json_rule_files:
         logger.error("[ERROR]\tNo JSON rule files found.")
         return None
     if len(json_rule_files) > 1:
-        logger.warning("[WARNING]\tMultiple JSON files found. Using the first one: %s", json_rule_files[0].name)
+        raise ValueError("Multiple scoring-rule JSON files found. Set rules_json explicitly in llm_config.json.")
     with open(json_rule_files[0], "r", encoding="utf-8") as f:
         return json.load(f)
 
-def load_the_CSV():
+def load_the_CSV(path=None, directory=None, output=None):
     """
     This function returns a data frame from the CSV file which is located in this folder.
     """
-    csv_files = sorted(Path(".").glob("*.csv"))
+    if path is not None:
+        return pd.read_csv(path)
+    csv_files = [
+        file for file in sorted(Path(directory or ".").glob("*.csv"))
+        if output is None or file.resolve() != Path(output).resolve()
+    ]
     if not csv_files:
         logger.error("[ERROR]\tNo CSV files found.")
         return None
     if len(csv_files) > 1:
-        logger.warning("[WARNING]\tMultiple CSV files found. Using the first one: %s", csv_files[0].name)
+        raise ValueError("Multiple input CSV files found. Set input_csv explicitly in llm_config.json.")
     return pd.read_csv(csv_files[0])
 
 ############# Agent ########################
@@ -244,35 +269,35 @@ if __name__ == "__main__":
     startup_cwd = Path.cwd().resolve()
     logger.info("[INFO]\tStartup working directory: %s", startup_cwd)
 
-    provider = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
-    local_client = None
-    if provider == "local":
-        try:
-            local_client = LocalLLMClient(LocalLLMConfig.from_env())
-        except ValueError as error:
-            logger.error("Invalid local LLM configuration: %s", error)
-            raise SystemExit(1)
-        logger.info("Using local backend with model %s; no cloud fallback.", local_client.config.model)
-    elif provider == "gemini":
-        api_key = os.getenv("GEMINI_API_KEY", "").strip()
-        if not api_key:
-            api_key = try_load_api_key_from_key_file()
-        if not api_key:
-            logger.error("GEMINI_API_KEY is required for Gemini mode. Set LLM_PROVIDER=local to use a local server.")
-            raise SystemExit(1)
-        client = genai.Client(api_key=api_key)
-    else:
-        logger.error("LLM_PROVIDER must be gemini or local, not %r.", provider)
+    parser = argparse.ArgumentParser(description="Score interview answers with a configured LLM backend.")
+    parser.add_argument("--config", help="Path to an LLM JSON configuration; defaults to llm_config.json.")
+    args = parser.parse_args()
+    try:
+        config = load_config(args.config or "llm_config.json", require_file=args.config is not None)
+        scoring_client = build_client(config.llm)
+    except (ValueError, OSError) as error:
+        logger.error("Invalid LLM configuration: %s", error)
         raise SystemExit(1)
+    logger.info(
+        "Using provider %s with model %s; no automatic provider fallback.",
+        config.llm.provider, config.llm.model,
+    )
 
     # Load input data
-    df = load_the_CSV()
+    try:
+        df = load_the_CSV(config.input_csv, config.directory, config.output_csv)
+        scoring_rules = load_the_JSON(
+            config.rules_json, config.directory,
+            excluded=[config.config_path] if config.config_path else [],
+        )
+    except (OSError, ValueError):
+        logger.error("Cannot load input CSV or scoring rules. Check input_csv and rules_json.")
+        raise SystemExit(1)
     if df is None or df.empty:
         logger.error("[FATAL ERROR]\tNo CSV file to process. Exiting.")
         raise SystemExit(1)
     df.columns = [str(col).strip(' "') for col in df.columns]
 
-    scoring_rules = load_the_JSON()
     if scoring_rules is None:
         logger.error("[FATAL ERROR]\tNo JSON rule file to process. Exiting.")
         raise SystemExit(1)
@@ -282,9 +307,8 @@ if __name__ == "__main__":
             rules_dict[question_key] = rule_data
 
     results_list = []
-    maximum_attenpts = 20  # set this higher for more attempts in case of model errors, but it will take longer to process the CSV file
-    llm_models = ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-1.5-flash']  # choose your preferred llm model
-    output_file = "scored_answers.csv"
+    output_file = config.output_csv
+    result_columns = ["respondent_row", "question", "original_answer", "score", "confidence", "reasoning"]
 
     for position, (index, row) in enumerate(df.iterrows(), start=1):
         print(f"[{position}/{len(df)}]\tRow processing...")
@@ -304,40 +328,26 @@ if __name__ == "__main__":
                 safe_answer_text = security.main_security_sanitization(str(answer_text))
                 
                 # Call the agent
-                if provider == "local":
-                    final_evaluation = local_client.score(
+                try:
+                    final_evaluation = scoring_client.score(
                         system_prompt, question_column, scoring_method,
                         range_min, range_max, safe_answer_text,
                     )
-                else:
-                    final_evaluation = agent_loop(
-                        llm_model=llm_models[0],
-                        system_prompt=system_prompt,
-                        tool_config=tool_config,
-                        current_question=question_column,
-                        rules=scoring_method,
-                        range_min=range_min,
-                        range_max=range_max,
-                        answer_text=safe_answer_text,
-                        maximum_attenpts=maximum_attenpts
-                    )
+                except RequestBudgetExceeded:
+                    pd.DataFrame(results_list, columns=result_columns).to_csv(output_file, index=False)
+                    logger.error("Request budget exhausted. Partial results saved; no provider fallback.")
+                    raise SystemExit(2)
 
                 if final_evaluation is None:
-                    attempt_limit = local_client.config.max_attempts if provider == "local" else maximum_attenpts
+                    attempt_limit = config.llm.max_attempts
                     logger.error("[ERROR]\tRow %d, Question '%s': Agent failed to provide a valid evaluation after at most %d attempts. Skipping.", position + 1, question_column, attempt_limit)
                     continue
                 else:
                     # 1. Convert the JSON string to a Python dictionary
                     try:
-                        eval_data = json.loads(final_evaluation)
-                    except json.JSONDecodeError as e:
-                        logger.error("[ERROR]\tRow %d, Question '%s': Failed to parse JSON response. Raw output: %s", position + 1, question_column, final_evaluation)
-                        results_list.append({
-                                                "respondent_row": position + 1,
-                                                "question": question_column,
-                                                "original_answer": safe_answer_text,
-                                                "raw_evaluation": final_evaluation
-                                            })
+                        eval_data = validate_evaluation(final_evaluation, range_min, range_max)
+                    except ValueError:
+                        logger.error("Row %d, Question '%s': Invalid evaluation; not saved.", position + 1, question_column)
                         continue
 
                     # 2. Save the extracted parameters to separate keys (columns)
@@ -355,7 +365,7 @@ if __name__ == "__main__":
 
 
     # Save to new CSV    
-    result_df = pd.DataFrame(results_list)
+    result_df = pd.DataFrame(results_list, columns=result_columns)
     result_df.to_csv(output_file, index=False)
     logger.info("[SYSTEM]\tResults saved to '%s'", output_file)
     logger.info("[SYSTEM]\tExecution completed successfully.")
