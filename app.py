@@ -7,6 +7,7 @@ import pandas as pd
 from google import genai
 from google.genai import types
 import security, guardrails
+from local_llm import LocalLLMClient, LocalLLMConfig
 
 logger = logging.getLogger("agent")
 logger.setLevel(logging.INFO)
@@ -143,10 +144,10 @@ final_output_schema = types.Schema(
 )
 
 # Load static context and specification (only runs once)
-with open("context.md", "r", encoding="utf-8") as f:
+with open("specs/context.md", "r", encoding="utf-8") as f:
     context_text = f.read()
 
-with open("specification.md", "r", encoding="utf-8") as f:
+with open("specs/specification.md", "r", encoding="utf-8") as f:
     spec_text = f.read()
 
 # Compose the System Prompt for the model
@@ -243,16 +244,26 @@ if __name__ == "__main__":
     startup_cwd = Path.cwd().resolve()
     logger.info("[INFO]\tStartup working directory: %s", startup_cwd)
 
-    # API key
-    api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    if not api_key:
-        api_key = try_load_api_key_from_key_file()
-
-    if not api_key:
-        logger.error('[FATAL ERROR]\tGEMINI_API_KEY is not set. Stopping program. \nPlease set the environment variable and try again: $env:GEMINI_API_KEY="YOUR_API_KEY_HERE"\n or set it in a .key file in the current directory.')
+    provider = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
+    local_client = None
+    if provider == "local":
+        try:
+            local_client = LocalLLMClient(LocalLLMConfig.from_env())
+        except ValueError as error:
+            logger.error("Invalid local LLM configuration: %s", error)
+            raise SystemExit(1)
+        logger.info("Using local backend with model %s; no cloud fallback.", local_client.config.model)
+    elif provider == "gemini":
+        api_key = os.getenv("GEMINI_API_KEY", "").strip()
+        if not api_key:
+            api_key = try_load_api_key_from_key_file()
+        if not api_key:
+            logger.error("GEMINI_API_KEY is required for Gemini mode. Set LLM_PROVIDER=local to use a local server.")
+            raise SystemExit(1)
+        client = genai.Client(api_key=api_key)
+    else:
+        logger.error("LLM_PROVIDER must be gemini or local, not %r.", provider)
         raise SystemExit(1)
-
-    client = genai.Client(api_key=api_key)
 
     # Load input data
     df = load_the_CSV()
@@ -293,20 +304,27 @@ if __name__ == "__main__":
                 safe_answer_text = security.main_security_sanitization(str(answer_text))
                 
                 # Call the agent
-                final_evaluation = agent_loop(
-                    llm_model=llm_models[0],  # You can change the model here if needed
-                    system_prompt=system_prompt,
-                    tool_config=tool_config,
-                    current_question=question_column,
-                    rules=scoring_method,
-                    range_min=range_min,
-                    range_max=range_max,
-                    answer_text=safe_answer_text,
-                    maximum_attenpts=maximum_attenpts
-                )
+                if provider == "local":
+                    final_evaluation = local_client.score(
+                        system_prompt, question_column, scoring_method,
+                        range_min, range_max, safe_answer_text,
+                    )
+                else:
+                    final_evaluation = agent_loop(
+                        llm_model=llm_models[0],
+                        system_prompt=system_prompt,
+                        tool_config=tool_config,
+                        current_question=question_column,
+                        rules=scoring_method,
+                        range_min=range_min,
+                        range_max=range_max,
+                        answer_text=safe_answer_text,
+                        maximum_attenpts=maximum_attenpts
+                    )
 
                 if final_evaluation is None:
-                    logger.error("[ERROR]\tRow %d, Question '%s': Agent failed to provide a valid evaluation after %d attempts. Skipping.", position + 1, question_column, maximum_attenpts)
+                    attempt_limit = local_client.config.max_attempts if provider == "local" else maximum_attenpts
+                    logger.error("[ERROR]\tRow %d, Question '%s': Agent failed to provide a valid evaluation after at most %d attempts. Skipping.", position + 1, question_column, attempt_limit)
                     continue
                 else:
                     # 1. Convert the JSON string to a Python dictionary

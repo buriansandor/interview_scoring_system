@@ -8,6 +8,7 @@ The goal of this scirpt is to make it possible to evaluate several answers with 
 
 > *This as a more reliable, deterministic methodology to turn text-based answers scores, numeric values. The core idea is to set a prompt to each question, how the questions can be evaluated, and send this evaluation method, with the question and the given answer to an LLM, to turn the answer to a numeric value in a specific range. The LLM should give back the score, a reason why this is a good score, and a confidence value. If the confidence value is low, then we have to send the question to the LLM again, but now we have to send the given score, the confidence, and the reason, asking the LLM to rethink the given value with a higher confidence. We will do this until the confidence is high enough, then we accept the values.*
 
+
 ## How-to
 
 Requirements:
@@ -49,6 +50,19 @@ pip install pandas
 ### 3. Set Environment Variable
 
 Set your API key in a file which has extension `.key`
+
+Choose between the local LLM and the Gemini:
+```Shell
+$env:LLM_PROVIDER = "local"
+$env:LOCAL_LLM_BASE_URL = "http://127.0.0.1:8080/v1"
+$env:LOCAL_LLM_MODEL = "interview-scorer"
+```
+
+> #### Local LLM backend (llama.cpp, Ollama, compatible servers)
+>
+> The default remains `LLM_PROVIDER=gemini`. Set `LLM_PROVIDER=local` to send scoring requests exclusively to your configured server. Local mode requires no Gemini key, does not read `.key` files, and never falls back to a cloud provider. The current shared requirements still install the Google SDK for the Gemini backend; local mode does not initialize its client or call its API.
+>
+> *For an already running Ollama server with a downloaded model, set the base URL to `http://127.0.0.1:11434/v1` and the model name to its exact installed tag. Other servers, such as LM Studio or vLLM, can be used when they expose the same OpenAI-compatible chat-completions contract.*
 
 ### 4. Run the Agent
 
@@ -141,3 +155,4 @@ Available tools for the AI Agent:
 - confidentality_enhance - if the confidence value is lower then 0.5 then this tool will give a second wuestion based on the reason of the score and the scoring method, to give a value  with better confidentality. This is the self-reflection.
 
 The agent get the data one-by one, row by row.
+
