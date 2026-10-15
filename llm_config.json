@@ -1,0 +1,52 @@
+{
+  "provider": "local",
+  "input_csv": "tests/results/test.csv",
+  "rules_json": "evaluation.json",
+  "output_csv": "scored_answers.csv",
+  "settings": {
+    "timeout": 120,
+    "max_tokens": 1024,
+    "max_attempts": 3,
+    "max_reflections": 1,
+    "temperature": 0.1,
+    "max_requests_per_run": 50
+  },
+  "providers": {
+    "local": {
+      "base_url": "http://127.0.0.1:8080/v1",
+      "model": "interview-scorer",
+      "api_key_env": "LOCAL_LLM_API_KEY",
+      "api_key_file": null,
+      "json_mode": "json_object",
+      "requests_per_minute": 0
+    },
+    "gemini": {
+      "model": "gemini-2.5-flash",
+      "api_key_env": "GEMINI_API_KEY",
+      "api_key_file": "gemini.key",
+      "json_mode": "json_schema",
+      "requests_per_minute": 5
+    },
+    "mistral_free": {
+      "model": "mistral-small-latest",
+      "api_key_env": "MISTRAL_API_KEY",
+      "api_key_file": "mistral.key",
+      "json_mode": "json_object",
+      "requests_per_minute": 5
+    },
+    "groq_free": {
+      "model": "openai/gpt-oss-120b",
+      "api_key_env": "GROQ_API_KEY",
+      "api_key_file": "groq.key",
+      "json_mode": "json_schema",
+      "requests_per_minute": 10
+    },
+    "openrouter": {
+      "model": "openrouter/free",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "api_key_file": "openrouter.key",
+      "json_mode": "json_object",
+      "requests_per_minute": 10
+    }
+  }
+}
