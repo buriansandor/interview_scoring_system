@@ -4,7 +4,7 @@ Notebooks: [![Jupyter](https://img.shields.io/badge/Jupyter-F37626?logo=jupyter&
 [![Google Colab](https://img.shields.io/badge/Google%20Colab-F9AB00?logo=googlecolab&logoColor=fff&style=for-the-badge)](Interview_answer_scoring_system-colab_version.ipynb)
 [![Kaggle](https://img.shields.io/badge/Kaggle-20BEFF?logo=kaggle&logoColor=fff&style=for-the-badge)](https://www.kaggle.com/code/sndorburian/interview-answer-scoring-system)
 
-Current Status: [![GitHub Tests](https://github.com/sndorburian/interview_scoring_system/actions/workflows/tests.yml/badge.svg)](https://github.com/sndorburian/interview_scoring_system/actions/workflows/tests.yml)
+Current Status: [![GitHub Tests](https://github.com/buriansandor/interview_scoring_system/actions/workflows/tests.yml/badge.svg)](https://github.com/buriansandor/interview_scoring_system/actions/workflows/tests.yml)
 
 This is a tool to give score values to text-based answers from interviews. This is useful in the evaluation of surveys.
 
