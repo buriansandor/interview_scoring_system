@@ -46,6 +46,7 @@ jobs:
 
       - name: Validate notebook files
         run: |
+          python -m pip install nbformat
           python - <<'PY'
           from pathlib import Path
           import nbformat
