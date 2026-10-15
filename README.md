@@ -22,7 +22,7 @@ Requirements:
 
 - [Python 3.11+](https://www.python.org/)
 - A running local OpenAI-compatible server, or an API key for the selected
-  Gemini, Mistral, Groq, or OpenRouter provider.
+  [Gemini](https://aistudio.google.com/api-keys), Mistral, Groq, or OpenRouter provider.
 
 ### 1. Activate Virtual Environment
 
@@ -78,9 +78,8 @@ Relative input, output, and key-file paths are resolved relative to that config
 file. JSON configuration takes priority over the legacy `LLM_PROVIDER` and
 `LOCAL_LLM_*` environment settings.
 
-See [CONFIGURATION.md](CONFIGURATION.md) for the full Hungarian setup guide,
-security limitations, and examples. JSON is machine-readable; the README is
-documentation, not an executable configuration format.
+See [HUN_CONFIGURATION.md](HUN_CONFIGURATION.md) for the full Hungarian setup guide,
+security limitations, and examples. JSON is machine-readable;
 
 ### Notebooks
 
