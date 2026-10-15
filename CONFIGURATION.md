@@ -114,6 +114,39 @@ A `rules_json` a pontozási szabályfájl, nem az LLM-konfiguráció.
 Automatikus fájlkeresésnél a program kihagyja a konfigurációt és a kimeneti
 CSV-t. Több lehetséges bemenet esetén megáll, nem találomra választ.
 
+## Notebookok: helyi Jupyter és Colab
+
+A repó mindkét notebookja ugyanazt a JSON-t és `app.py`-t használja.
+A `notebook_support.py` segédmodul futtatja a programot, majd visszaadja
+a kimeneti CSV-t DataFrame-ként. Nincs külön, Geminihez kötött pontozókód.
+
+- **Helyi notebook:** `interview_scoring_system.ipynb`. A repó gyökeréből
+  nyisd meg, állítsd be a JSON-t, majd futtasd a cellákat. Másik
+  konfigurációhoz a `CONFIG_PATH` útvonalat változtasd.
+- **Colab:** `Interview_answer_scoring_system-colab_version.ipynb`.
+  A setup csak hiányzó checkout esetén klónoz; meglévő fájlokat nem
+  állít vissza és nem vált ágat. A PR nyitva tartása alatt az alapértelmezett
+  `REPO_REF` a `feat/json-llm-provider-config`; merge után válts `main`-re.
+- **Secrets:** kizárólag a kiválasztott felhős szolgáltató hiányzó kulcsát
+  keresi, a profil `api_key_env` nevével. A környezeti változó és a
+  kiválasztott `.key` fájl elsőbbséget élvez. Helyi módhoz nem kér Colab
+  Secretet. A kulcs a gyermekfolyamat környezetébe kerül, nem parancssori
+  argumentumba, notebookforrásba vagy automatikusan létrehozott fájlba.
+- **Részleges eredmény:** a futási keret kimerülését figyelmeztetés és
+  `result_df.attrs["partial_results"] = True` jelzi. Egyéb futási hibánál
+  nem mutatja korábbi futás elavult CSV-jét.
+
+A notebook nem nyomtatja ki automatikusan a gyermekfolyamat teljes naplóját.
+Az `agent.log` viszont tartalmazhat interjúszöveget, a DataFrame előnézete
+pedig válaszokat: megosztás előtt töröld a notebook kimeneteit, és a naplót
+is kezeld bizalmasan. A korábbi Colab-cellák már nem írják át az `app.py`-t
+és nem telepítik a szükségtelen `guardrails-ai` csomagot.
+
+Hosztolt Colabban a `localhost` a távoli futtatókörnyezet, nem az otthoni
+géped. Otthoni llama.cpp/Ollama szerverhez használd a helyi notebookot vagy
+helyi runtime-ot; ne nyiss hitelesítés nélküli publikus szervert.
+A külső Kaggle-másolatot ez a repómódosítás nem szinkronizálja.
+
 ## Híváskorlátok és ellenőrzés
 
 ```json
@@ -181,12 +214,15 @@ python -m unittest discover -s tests -v
 
 A tesztek konfigurációt, kulcsválasztást, validálást, híváskeretet,
 ütemezést, HTTP-kéréseket és a teljes CSV-feldolgozást vizsgálnak.
-A 47 teszt tiszta virtuális környezetben is sikeresen lefutott, és a
+A 62 teszt tiszta virtuális környezetben is sikeresen lefutott, és a
 függőségellenőrzés nem talált hibás követelményt.
 A HTTP-tesztek helyi tesztszervert, a Gemini-teszt mockolt SDK-t használ:
 nem minősítik a valós modellek pontozási minőségét vagy aktuális
 elérhetőségét. Éles, felhős hívást és valódi helyi inferenciát nem futtattunk.
 
-Ez a változat az `app.py` programra vonatkozik. A notebookok továbbra
-is változatlanok. Éles kutatási adatok előtt anonimizálj, ellenőrizd a
-szolgáltató adatkezelését, és hasonlítsd a pontozást kézzel értékelt mintához.
+A notebookok kódcelláit is ellenőrizzük, és mindkét notebook feldolgozási
+folyamata lefut helyi HTTP-tesztszerverrel. A csomagtelepítő és klónozó
+setupcellákat ebben a tesztben kihagyjuk; valódi Colab-felületet nem
+vezéreltünk. A Colab Secrets működését mockolt hozzáféréssel teszteljük.
+Éles kutatási adatok előtt anonimizálj, ellenőrizd a szolgáltató
+adatkezelését, és hasonlítsd a pontozást kézzel értékelt mintához.

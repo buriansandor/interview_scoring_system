@@ -1,6 +1,9 @@
 <center><h1>Interview answer scoring system</h1></center>
 
-Run: [![Google Colab Badge](https://img.shields.io/badge/Google%20Colab-F9AB00?logo=googlecolab&logoColor=fff&style=for-the-badge)](https://colab.research.google.com/drive/14IeH65N0BbDL8qD5Nu2EGbcxqJCUIz4S?usp=sharing) [![Kaggle Badge](https://img.shields.io/badge/Kaggle-20BEFF?logo=kaggle&logoColor=fff&style=for-the-badge)](https://www.kaggle.com/code/sndorburian/interview-answer-scoring-system)
+Notebooks: [Local / Jupyter](interview_scoring_system.ipynb) |
+[Colab version](Interview_answer_scoring_system-colab_version.ipynb).
+The [external Kaggle copy](https://www.kaggle.com/code/sndorburian/interview-answer-scoring-system)
+is not automatically synchronized with these repository notebooks.
 
 This is a tool to give score values to text-based answers from interviews. This is useful in the evaluation of surveys.
 
@@ -78,6 +81,35 @@ file. JSON configuration takes priority over the legacy `LLM_PROVIDER` and
 See [CONFIGURATION.md](CONFIGURATION.md) for the full Hungarian setup guide,
 security limitations, and examples. JSON is machine-readable; the README is
 documentation, not an executable configuration format.
+
+### Notebooks
+
+Both repository notebooks use the same `llm_config.json`, provider profiles,
+key-file/environment lookup, and scoring implementation as the CLI.
+`notebook_support.py` runs `app.py --config ...` in a subprocess and returns
+the resulting DataFrame; it does not duplicate or rewrite the scoring code.
+
+- **Local/Jupyter:** open `interview_scoring_system.ipynb` from the repository
+  root, install its requirements, edit the JSON, and run the scoring cell.
+  Change `CONFIG_PATH` to select a different configuration.
+- **Colab:** open `Interview_answer_scoring_system-colab_version.ipynb`. Its
+  setup clones the configured repository ref only if no checkout exists; it
+  does not reset existing files. While PR #1 is open the default ref is
+  `feat/json-llm-provider-config`; after merge change `REPO_REF` to `main`.
+- **Colab Secrets:** when the selected cloud provider has no environment/key-file
+  credential, only its configured `api_key_env` secret is requested.
+  Local mode does not request Secrets. A secret is passed privately to the
+  child environment, not stored in notebook source or written to a `.key` file.
+- **Results:** request-budget exhaustion returns saved partial results with
+  a warning and `result_df.attrs["partial_results"] = True`. Other process
+  errors stop execution instead of displaying a stale CSV. Child logs are not
+  automatically printed into notebook output; inspect `agent.log` only when
+  needed, because it may contain interview data.
+
+No extra `guardrails-ai` installation is needed: `guardrails.py` is part of this
+repository. Clear notebook outputs before sharing. Hosted Colab localhost is
+not your home computer; use a local notebook/runtime for a home LLM server,
+rather than exposing an unauthenticated server publicly.
 
 ### Free-tier safeguards
 
@@ -178,8 +210,8 @@ JSON, consider increasing `LOCAL_LLM_MAX_TOKENS`.
 
 Keep the server bound to `127.0.0.1` unless you deliberately configure a trusted
 LAN deployment. `localhost` in Colab/Kaggle refers to the notebook machine, not
-your home computer. This implementation covers `app.py`; the existing notebook
-versions are unchanged. The configured server is trusted, so point it only at
+your home computer. Both notebooks call the same `app.py` implementation.
+The configured server is trusted, so point it only at
 an endpoint where you intend to send your interview data. Local inference has
 no provider API charge, but still uses your hardware and electricity.
 

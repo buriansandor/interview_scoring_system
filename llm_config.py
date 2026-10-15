@@ -47,6 +47,7 @@ class AppConfig:
     input_csv: Path | None = None
     rules_json: Path | None = None
     output_csv: Path | None = None
+    api_key_env: str | None = None
 
 
 def _object(value, label, allowed):
@@ -75,7 +76,7 @@ def _path(value, directory, label):
     return (directory / path).resolve() if not path.is_absolute() else path.resolve()
 
 
-def _secret(profile, directory, required):
+def _secret(profile, directory, required, secret_getter=None):
     env_name = profile["api_key_env"]
     key_file = profile["api_key_file"]
     if not isinstance(env_name, str) or not env_name:
@@ -84,12 +85,21 @@ def _secret(profile, directory, required):
     key = os.getenv(env_name, "").strip()
     if not key and path and path.is_file():
         key = path.read_text(encoding="utf-8-sig").strip()
+    if not key and required and secret_getter is not None:
+        try:
+            value = secret_getter(env_name)
+        except Exception:
+            # Secret backends may include credentials in error messages.
+            raise ValueError(f"Cannot read the selected provider's secret: {env_name}.") from None
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"The selected provider's secret is empty: {env_name}.")
+        key = value.strip()
     if required and not key:
         raise ValueError(f"Missing API key. Set {env_name} or create the selected provider's .key file.")
     return key
 
 
-def load_config(path="llm_config.json", *, require_file=False):
+def load_config(path="llm_config.json", *, require_file=False, secret_getter=None):
     """JSON wins over legacy LLM_* variables; missing explicitly requested files fail."""
     path = Path(path).expanduser().resolve()
     if not path.is_file():
@@ -132,7 +142,7 @@ def load_config(path="llm_config.json", *, require_file=False):
     max_reflections = _number(settings.get("max_reflections", 1), "max_reflections", 0, integer=True)
     temperature = _number(settings.get("temperature", 0.1), "temperature", 0, maximum=2)
     max_requests = _number(settings.get("max_requests_per_run", 50), "max_requests_per_run", 1, integer=True)
-    key = _secret(profile, path.parent, required=provider != "local")
+    key = _secret(profile, path.parent, required=provider != "local", secret_getter=secret_getter)
     llm = LocalLLMConfig(
         base_url=profile["base_url"].strip(), model=profile["model"].strip(),
         api_key=key, provider=provider, json_mode=profile["json_mode"],
@@ -155,7 +165,7 @@ def load_config(path="llm_config.json", *, require_file=False):
     secret_paths.add(_path(profile["api_key_file"], path.parent, "api_key_file"))
     if output_csv in secret_paths:
         raise ValueError("output_csv must not overwrite an API-key file.")
-    return AppConfig(llm, path.parent, path, input_csv, rules_json, output_csv)
+    return AppConfig(llm, path.parent, path, input_csv, rules_json, output_csv, profile["api_key_env"])
 
 
 def _legacy_config(directory):
