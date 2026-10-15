@@ -1,0 +1,5 @@
+# How to
+Find the description and installing instructions in the [README.md](README.md).
+Set up the current configureation in the [llm_config.json](llm_config.json).
+Add `.key` files to use the repo with external API, if not, then use withh local LLM server.
+Set up the evaluation method in [evaluation.json](evaluation.json).
