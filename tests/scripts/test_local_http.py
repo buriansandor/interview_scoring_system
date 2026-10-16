@@ -32,7 +32,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Location", "/redirected")
             self.end_headers()
             return
-        content = json.dumps({"score": 3, "confidence": 0.8, "reasoning": "A rubrika alapján."})
+        responses = getattr(self.server, "evaluation_responses", None)
+        value = responses.pop(0) if responses else {"score": 3, "confidence": 0.8, "reasoning": "A rubrika alapján."}
+        content = json.dumps(value)
         body = json.dumps({"choices": [{"message": {"role": "assistant", "content": content}}]}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -197,6 +199,79 @@ class LocalHTTPTests(unittest.TestCase):
             with (work / "scored_answers.csv").open(encoding="utf-8") as file:
                 self.assertEqual(len(list(csv.DictReader(file))), 1)
             self.assertEqual(len(self.server.received), 1)
+
+    def _run_two_stage(self, responses, secondary=True, request_cap=20):
+        self.server.evaluation_responses = responses
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            (work / "specs").mkdir()
+            for name in ("context.md", "specification.md"):
+                shutil.copy2(ROOT / "specs" / name, work / "specs" / name)
+            (work / "input.csv").write_text("Question\nAnswer\n", encoding="utf-8")
+            (work / "rules.json").write_text(json.dumps({
+                "questions": [{"Question": ["FULL RUBRIC", 1, 5]}]
+            }), encoding="utf-8")
+            (work / "llm_config.json").write_text(json.dumps({
+                "primary": {"provider": "local", "model": "first"},
+                "secondary": {"provider": "local", "model": "second"} if secondary else None,
+                "input_csv": "input.csv", "rules_json": "rules.json",
+                "settings": {"max_attempts": 1, "max_requests_per_run": request_cap},
+                "review": {"primary_weight": 3, "secondary_weight": 1},
+                "providers": {"local": {"base_url": self.base_url}},
+            }), encoding="utf-8")
+            run = subprocess.run(
+                [sys.executable, str(ROOT / "app.py")], cwd=work,
+                capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(run.returncode, 2 if request_cap == 1 else 0, run.stderr)
+            with (work / "scored_answers.csv").open(encoding="utf-8") as file:
+                rows = list(csv.DictReader(file))
+            self.assertEqual(len(rows), 1)
+            return rows[0]
+
+    def test_csv_records_weighted_score_and_normalized_disagreement(self):
+        row = self._run_two_stage([
+            {"score": 2, "confidence": 0.2, "reasoning": "Missing details."},
+            {"score": 4, "confidence": 0.8, "reasoning": "Rubric evidence."},
+        ])
+        self.assertEqual(float(row["score"]), 2.5)
+        self.assertEqual(float(row["d"]), 0.5)
+        self.assertEqual(row["primary_score"], "2")
+        self.assertEqual(row["secondary_score"], "4")
+        self.assertEqual(row["confidence"], "")
+        self.assertEqual(row["needs_review"], "True")
+        self.assertEqual(row["respondent_row"], "1")
+        self.assertEqual(row["second_step_reason"], "low_confidence")
+        self.assertEqual([request[2]["model"] for request in self.server.received], ["first", "second"])
+
+    def test_csv_technical_failure_has_no_fake_primary_or_mean(self):
+        row = self._run_two_stage([
+            {"score": 99, "confidence": 0.8, "reasoning": "Invalid scale."},
+            {"score": 4, "confidence": 0.8, "reasoning": "Independent score."},
+        ])
+        self.assertEqual(row["score"], "4")
+        self.assertEqual(row["primary_score"], "")
+        self.assertEqual(row["d"], "")
+        self.assertEqual(row["status"], "secondary_only")
+        self.assertEqual(row["second_step_reason"], "technical_failure")
+
+    def test_csv_both_failed_still_records_error_row(self):
+        row = self._run_two_stage([
+            {"score": 99, "confidence": 0.8, "reasoning": "Invalid scale."},
+            {"score": 99, "confidence": 0.8, "reasoning": "Still invalid."},
+        ])
+        self.assertEqual(row["score"], "")
+        self.assertEqual(row["status"], "failed")
+        self.assertEqual(row["needs_review"], "True")
+
+    def test_csv_budget_during_review_saves_valid_primary(self):
+        row = self._run_two_stage([
+            {"score": 2, "confidence": 0.2, "reasoning": "Uncertain."},
+        ], request_cap=1)
+        self.assertEqual(row["score"], "2")
+        self.assertEqual(row["secondary_status"], "request_budget_exhausted")
+        self.assertEqual(row["needs_review"], "True")
+        self.assertEqual(len(self.server.received), 1)
 
 
 if __name__ == "__main__":

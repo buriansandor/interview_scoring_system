@@ -1,6 +1,6 @@
 """Validated JSON configuration; secrets stay in environment variables or .key files."""
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import json
 import math
 import os
@@ -40,6 +40,29 @@ PROVIDERS = {
 
 
 @dataclass(frozen=True)
+class ReviewSettings:
+    confidence_threshold: float = 0.5
+    primary_weight: float = 0.5
+    secondary_weight: float = 0.5
+    disagreement_threshold: float = 0.25
+
+    def __post_init__(self):
+        for name in ("confidence_threshold", "disagreement_threshold"):
+            _number(getattr(self, name), name, 0, maximum=1)
+        for name in ("primary_weight", "secondary_weight"):
+            _number(getattr(self, name), name, 0)
+        if max(self.primary_weight, self.secondary_weight) == 0:
+            raise ValueError("At least one review weight must be positive.")
+
+    @property
+    def normalized_weights(self):
+        # Avoid overflow even for finite, very large configured weights.
+        scale = max(self.primary_weight, self.secondary_weight)
+        primary, secondary = self.primary_weight / scale, self.secondary_weight / scale
+        return primary / (primary + secondary), secondary / (primary + secondary)
+
+
+@dataclass(frozen=True)
 class AppConfig:
     llm: LocalLLMConfig
     directory: Path
@@ -48,6 +71,10 @@ class AppConfig:
     rules_json: Path | None = None
     output_csv: Path | None = None
     api_key_env: str | None = None
+    review: ReviewSettings = field(default_factory=ReviewSettings)
+    secondary_llm: LocalLLMConfig | None = None
+    secondary_api_key_env: str | None = None
+    secondary_api_key_file: Path | None = None
 
 
 def _object(value, label, allowed):
@@ -99,6 +126,26 @@ def _secret(profile, directory, required, secret_getter=None):
     return key
 
 
+def _role_profile(role, profiles, label):
+    if not isinstance(role, dict):
+        raise ValueError(f"{label} must be an object with a provider.")
+    provider = role.get("provider")
+    if not isinstance(provider, str) or provider not in PROVIDERS:
+        raise ValueError(f"{label}.provider must name a supported provider.")
+    overrides = {key: value for key, value in role.items() if key != "provider"}
+    allowed = {"model", "api_key_env", "api_key_file", "json_mode", "requests_per_minute"}
+    if provider == "local":
+        allowed.add("base_url")
+    _object(overrides, label, allowed)
+    profile = {**PROVIDERS[provider], **profiles.get(provider, {}), **overrides}
+    for key in ("model", "base_url", "api_key_env", "json_mode"):
+        if not isinstance(profile[key], str) or not profile[key].strip():
+            raise ValueError(f"{label}.{key} must be a nonempty string.")
+    _path(profile["api_key_file"], Path("."), "api_key_file")
+    _number(profile["requests_per_minute"], "requests_per_minute", 0)
+    return provider, profile
+
+
 def load_config(path="llm_config.json", *, require_file=False, secret_getter=None):
     """JSON wins over legacy LLM_* variables; missing explicitly requested files fail."""
     path = Path(path).expanduser().resolve()
@@ -109,11 +156,11 @@ def load_config(path="llm_config.json", *, require_file=False, secret_getter=Non
     with path.open(encoding="utf-8-sig") as file:
         data = json.load(file)
     _object(data, "configuration", {
-        "provider", "providers", "settings", "input_csv", "rules_json", "output_csv",
+        "provider", "primary", "secondary", "review", "providers", "settings",
+        "input_csv", "rules_json", "output_csv",
     })
-    provider = data.get("provider", "local")
-    if not isinstance(provider, str) or provider not in PROVIDERS:
-        raise ValueError("provider must be local, gemini, mistral_free, groq_free, or openrouter.")
+    if "provider" in data and "primary" in data:
+        raise ValueError("Use primary or the legacy provider field, not both.")
     profiles = data.get("providers", {})
     _object(profiles, "providers", PROVIDERS)
     for name, value in profiles.items():
@@ -130,7 +177,24 @@ def load_config(path="llm_config.json", *, require_file=False, secret_getter=Non
             _number(value["requests_per_minute"], "requests_per_minute", 0)
         if "json_mode" in value and value["json_mode"] not in {"none", "json_object", "json_schema"}:
             raise ValueError("json_mode must be none, json_object, or json_schema.")
-    profile = {**PROVIDERS[provider], **profiles.get(provider, {})}
+    provider, profile = _role_profile(
+        data.get("primary", {"provider": data.get("provider", "local")}), profiles, "primary",
+    )
+    secondary_role = data.get("secondary")
+    secondary_provider, secondary_profile = (None, None)
+    if secondary_role is not None:
+        secondary_provider, secondary_profile = _role_profile(secondary_role, profiles, "secondary")
+        if (
+            secondary_profile["api_key_env"] == profile["api_key_env"]
+            and _path(secondary_profile["api_key_file"], path.parent, "api_key_file")
+            != _path(profile["api_key_file"], path.parent, "api_key_file")
+        ):
+            raise ValueError("Different primary/secondary key files require distinct api_key_env names.")
+    review_data = data.get("review", {})
+    _object(review_data, "review", {
+        "confidence_threshold", "primary_weight", "secondary_weight", "disagreement_threshold",
+    })
+    review = ReviewSettings(**review_data)
     settings = data.get("settings", {})
     _object(settings, "settings", {
         "timeout", "max_tokens", "max_attempts", "max_reflections",
@@ -151,6 +215,14 @@ def load_config(path="llm_config.json", *, require_file=False, secret_getter=Non
         requests_per_minute=profile["requests_per_minute"],
         max_requests_per_run=max_requests,
     )
+    secondary_llm = None
+    if secondary_profile is not None:
+        secondary_llm = replace(
+            llm, provider=secondary_provider, model=secondary_profile["model"].strip(),
+            base_url=secondary_profile["base_url"].strip(), api_key="",
+            json_mode=secondary_profile["json_mode"],
+            requests_per_minute=secondary_profile["requests_per_minute"],
+        )
     input_csv = _path(data.get("input_csv"), path.parent, "input_csv")
     rules_json = _path(data.get("rules_json"), path.parent, "rules_json")
     output_csv = _path(data.get("output_csv", "scored_answers.csv"), path.parent, "output_csv")
@@ -163,9 +235,34 @@ def load_config(path="llm_config.json", *, require_file=False, secret_getter=Non
         for n, p in profiles.items()
     }
     secret_paths.add(_path(profile["api_key_file"], path.parent, "api_key_file"))
+    if secondary_profile:
+        secret_paths.add(_path(secondary_profile["api_key_file"], path.parent, "api_key_file"))
     if output_csv in secret_paths:
         raise ValueError("output_csv must not overwrite an API-key file.")
-    return AppConfig(llm, path.parent, path, input_csv, rules_json, output_csv, profile["api_key_env"])
+    return AppConfig(
+        llm, path.parent, path, input_csv, rules_json, output_csv, profile["api_key_env"],
+        review=review, secondary_llm=secondary_llm,
+        secondary_api_key_env=secondary_profile["api_key_env"] if secondary_profile else None,
+        secondary_api_key_file=(
+            _path(secondary_profile["api_key_file"], path.parent, "api_key_file")
+            if secondary_profile else None
+        ),
+    )
+
+
+def resolve_secondary_config(config, *, secret_getter=None):
+    """Resolve an explicitly configured secondary only when it is needed."""
+    if config.secondary_llm is None:
+        return config.llm
+    profile = {
+        "api_key_env": config.secondary_api_key_env,
+        "api_key_file": str(config.secondary_api_key_file) if config.secondary_api_key_file else None,
+    }
+    key = _secret(
+        profile, config.directory, required=config.secondary_llm.provider != "local",
+        secret_getter=secret_getter,
+    )
+    return replace(config.secondary_llm, api_key=key)
 
 
 def _legacy_config(directory):

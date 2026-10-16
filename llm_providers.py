@@ -6,8 +6,8 @@ from local_llm import LocalLLMClient, OUTPUT_SCHEMA
 
 
 class GeminiScoringClient(LocalLLMClient):
-    def __init__(self, config):
-        super().__init__(config)
+    def __init__(self, config, request_budget=None):
+        super().__init__(config, request_budget=request_budget)
         from google import genai
         self.sdk = genai.Client(
             api_key=config.api_key,
@@ -52,7 +52,7 @@ class GeminiScoringClient(LocalLLMClient):
         return response.text
 
 
-def build_client(config):
+def build_client(config, request_budget=None):
     if config.provider == "gemini":
-        return GeminiScoringClient(config)
-    return LocalLLMClient(config)
+        return GeminiScoringClient(config, request_budget=request_budget)
+    return LocalLLMClient(config, request_budget=request_budget)

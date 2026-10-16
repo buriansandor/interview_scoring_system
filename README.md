@@ -58,10 +58,15 @@ pip install pandas
 
 ### 3. Choose the backend in JSON
 
-Edit `llm_config.json`. Change `"provider"` to `local`, `gemini`,
+Edit `llm_config.json`. Set `primary.provider` to `local`, `gemini`,
 `mistral_free`, `groq_free`, or `openrouter`. The shipped configuration selects
 `local`, the example input `tests/results/test.csv`, and `evaluation.json`.
 Set `input_csv` to your own dataset before processing real interviews.
+
+An optional `secondary` role selects another provider/model, including a
+different model on the same provider. With `secondary: null`, a needed second
+step reuses the primary in a new call. The legacy top-level `provider` remains
+supported, but cannot coexist with `primary`.
 
 For cloud providers, put the API key in the matching file: `gemini.key`,
 `mistral.key`, `groq.key`, or `openrouter.key`. Each file contains only the key.
@@ -94,11 +99,13 @@ the resulting DataFrame; it does not duplicate or rewrite the scoring code.
   Change `CONFIG_PATH` to select a different configuration.
 - **Colab:** open `Interview_answer_scoring_system-colab_version.ipynb`. Its
   setup clones the configured repository ref only if no checkout exists; it
-  does not reset existing files. While PR #1 is open the default ref is
-  `feat/json-llm-provider-config`; after merge change `REPO_REF` to `main`.
+  does not reset existing files. While the two-stage scoring PR is open the ref
+  is `feat/two-stage-llm-scoring`; after merge change `REPO_REF` to `main`.
 - **Colab Secrets:** when the selected cloud provider has no environment/key-file
-  credential, only its configured `api_key_env` secret is requested.
-  Local mode does not request Secrets. A secret is passed privately to the
+  credential, only explicitly configured roles' secrets are considered.
+  Local roles do not request Secrets. A configured secondary key is prepared
+  for the subprocess; failure warns but does not block the primary.
+  A secret is passed privately to the
   child environment, not stored in notebook source or written to a `.key` file.
 - **Results:** request-budget exhaustion returns saved partial results with
   a warning and `result_df.attrs["partial_results"] = True`. Other process
@@ -132,11 +139,32 @@ Every backend uses the same application-managed validation and bounded
 reflection loop. The legacy Gemini tool helpers remain in the source for
 reference but are not used by the configured scoring path.
 
+### Primary and secondary scoring
+
+The primary always attempts the answer first. Distinct second-stage reasons
+are recorded: `technical_failure` when no valid primary evaluation exists,
+and `low_confidence` when a valid evaluation is below the configured threshold.
+The reviewer receives the original question, full rubric, scale, answer,
+written primary evaluation if valid, and reason. It must not claim access
+to hidden reasoning or force confidence upward.
+
+Only two valid scores are averaged using configured weights. A single valid
+score is retained without a fake zero; no valid scores produce an audit row
+with no final score. Both evaluations, weights, statuses, and normalized
+disagreement `d = abs(primary_score - secondary_score) / (range_max - range_min)`
+are saved. `d >= disagreement_threshold` mandates a review flag while retaining
+the mean. Aggregate confidence is blank; individual confidences remain.
+Both stages share one run-wide request budget.
+
+See [TWO_STAGE_SCORING.md](TWO_STAGE_SCORING.md) for configuration, the decision
+table, formulas, statuses, key handling, and methodological cautions.
+
 ### Local LLM backend (llama.cpp, Ollama, compatible servers)
 
-In `llm_config.json`, select `"provider": "local"` and edit `providers.local`.
+In `llm_config.json`, select `"primary": {"provider": "local"}` and edit `providers.local`.
 Local mode requires no
-Gemini key, does not read unrelated provider keys, and never falls back to a cloud provider.
+Gemini key. With `secondary: null`, both stages remain local. An explicitly
+configured cloud secondary may receive data when a second stage is needed.
 An explicitly configured local server key is supported if needed.
 The current shared requirements still install the Google SDK for the Gemini
 backend; local mode does not initialize its client or call its API.
@@ -191,7 +219,7 @@ model should be tested before processing a full dataset.
 | `LOCAL_LLM_TIMEOUT` | `120` | Per-request timeout in seconds. Slow CPU inference may need a higher value. |
 | `LOCAL_LLM_MAX_TOKENS` | `512` | Maximum output tokens per request. |
 | `LOCAL_LLM_MAX_ATTEMPTS` | `3` | Total call limit per answer, including corrections and reflection. |
-| `LOCAL_LLM_MAX_REFLECTIONS` | `1` | Maximum low-confidence re-evaluations within the total call limit. |
+| `LOCAL_LLM_MAX_REFLECTIONS` | `1` | Legacy transport option; the CLI's two-stage policy always allows at most one second stage. |
 | `LOCAL_LLM_JSON_MODE` | `json_object` | `json_object`, `json_schema`, or `none`, depending on server support. |
 
 Local mode sends `POST <base_url>/chat/completions`, disables inherited HTTP
@@ -257,10 +285,15 @@ of selecting an arbitrary file.
 
 ## The output
 
-The output by default is `scored_answers.csv` and `agent.log`. The structure of the output:
+The output by default is `scored_answers.csv` and `agent.log`. The original columns remain:
 ```
 respondent_row,question,original_answer,score,confidence,reasoning
 ```
+
+Additional audit columns preserve each evaluation, statuses, weights,
+`absolute_disagreement`, normalized `d`, and `needs_review`.
+Failed evaluations are retained as rows with blank scores, not silently dropped.
+Weighted scores have no aggregate confidence; see [TWO_STAGE_SCORING.md](TWO_STAGE_SCORING.md).
 
 __________________________________________________________________
 
@@ -268,44 +301,26 @@ __________________________________________________________________
 
 ```mermaid
 flowchart TD
-    Start([Start the script]) --> Config[Read llm_config.json and selected provider]
-    Config --> Load[Answers CSV and scoring method JSON]
-    
-    Load --> RowLoop{Is there unprocessed answer in the CSV file}
-    RowLoop -- No --> SaveFinal[Save the output data in CSV] --> Finish([Exit])
-    
-    RowLoop -- Yes --> QLoop{Have we finished with the given row?}
-    QLoop -- Yes --> NextRow[Next row] --> RowLoop
-    
-    QLoop -- No --> ExtractData[Get the current scoring rules for the given question]
-    ExtractData --> AgentCall[Call the LLM Agent]
-    
-    AgentCall --> OutputObject[Output of the agent:\n- score\n- confidence\n- reasoning]
-    
-    OutputObject --> RangeCheck{Python validates types and ranges}
-    
-    RangeCheck -- Not valid --> RangeError[Send back with error message] --> AgentCall
-    
-    RangeCheck -- Valid --> ConfidenceCheck{confidence < 0.5?}
-    
-    ConfidenceCheck -- Yes --> EnhanceTool{Reflection and request budget remain?}
-    EnhanceTool -- Yes --> AgentCall
-    EnhanceTool -- No --> SaveScore
-    
-    ConfidenceCheck -- No --> SaveScore[Save the score value]
-    SaveScore --> QLoop
-
-    %% Stílusok a jobb átláthatóságért
-    classDef loop fill:#f9f2f4,stroke:#333,stroke-width:2px;
-    classDef agent fill:#e1f5fe,stroke:#0277bd,stroke-width:2px;
-    classDef tool fill:#fff9c4,stroke:#fbc02d,stroke-width:2px;
-    
-    class RowLoop,QLoop loop;
-    class AgentCall,OutputObject agent;
-    class RangeCheck,ConfidenceCheck,EnhanceTool,RangeError tool;
+    Start[Load config, data and rubric] --> Primary[Primary: bounded attempts]
+    Primary --> Valid{Valid primary?}
+    Valid -- No --> Technical[Second step: technical_failure]
+    Valid -- Yes --> Confidence{Confidence below threshold?}
+    Confidence -- No --> SavePrimary[Save primary only]
+    Confidence -- Yes --> Review[Second step: low_confidence]
+    Technical --> Select[Configured secondary or primary reuse]
+    Review --> Select
+    Select --> Second[Second stage: bounded attempts]
+    Second --> Combine{How many valid scores?}
+    Combine -- Two --> Mean[Weighted mean and normalized d]
+    Combine -- One --> Single[Keep the one valid score]
+    Combine -- None --> Failed[Blank score and failure status]
+    Mean --> Audit[Save both evaluations and review flags]
+    Single --> Audit
+    Failed --> Audit
+    SavePrimary --> Audit
 ```
 
-The shipped JSON selects a local LLM by default. Change its provider field
+The shipped JSON selects a local LLM by default. Change `primary.provider`
 to select a cloud backend; no source-code edit is necessary.
 
 The answer of the LLM is an object, it hase these parameters:

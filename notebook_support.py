@@ -8,19 +8,19 @@ import warnings
 
 import pandas as pd
 
-from llm_config import load_config
+from llm_config import load_config, resolve_secondary_config
+
+
+def _colab_secret(name):
+    from google.colab import userdata
+    return userdata.get(name)
 
 
 def load_notebook_config(config_path, *, use_colab_secrets=False):
     """Use environment, then selected .key file, then optional selected Colab secret."""
-    def colab_secret(name):
-        # Import lazily: local mode and already configured keys do not need Colab.
-        from google.colab import userdata
-        return userdata.get(name)
-
     return load_config(
         config_path, require_file=True,
-        secret_getter=colab_secret if use_colab_secrets else None,
+        secret_getter=_colab_secret if use_colab_secrets else None,
     )
 
 
@@ -35,6 +35,20 @@ def run_notebook(config_path, repo_dir, *, use_colab_secrets=False):
     if config.api_key_env and config.llm.api_key:
         # The secret is passed privately to the child, never via arguments or disk.
         environment[config.api_key_env] = config.llm.api_key
+    if config.secondary_llm is not None:
+        try:
+            secondary = resolve_secondary_config(
+                config, secret_getter=_colab_secret if use_colab_secrets else None,
+            )
+        except (ValueError, OSError):
+            warnings.warn(
+                "Secondary credentials unavailable. The primary will still run; "
+                "a needed second stage will be recorded as failed.",
+                RuntimeWarning, stacklevel=2,
+            )
+        else:
+            if secondary.api_key:
+                environment[config.secondary_api_key_env] = secondary.api_key
     completed = subprocess.run(
         [sys.executable, str(app), "--config", str(config.config_path)],
         cwd=repo_dir, env=environment, check=False, capture_output=True, text=True,
@@ -46,7 +60,7 @@ def run_notebook(config_path, repo_dir, *, use_colab_secrets=False):
     partial = completed.returncode == 2
     if partial:
         warnings.warn(
-            "The request budget was exhausted. Returning saved partial results; no provider fallback.",
+            "The shared request budget was exhausted. Returning saved partial results; no further calls.",
             RuntimeWarning, stacklevel=2,
         )
     result = pd.read_csv(config.output_csv)

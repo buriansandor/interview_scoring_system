@@ -1,5 +1,14 @@
 {
-  "provider": "local",
+  "primary": {
+    "provider": "local"
+  },
+  "secondary": null,
+  "review": {
+    "confidence_threshold": 0.5,
+    "primary_weight": 0.5,
+    "secondary_weight": 0.5,
+    "disagreement_threshold": 0.25
+  },
   "input_csv": "tests/results/test.csv",
   "rules_json": "evaluation.json",
   "output_csv": "scored_answers.csv",
@@ -7,7 +16,6 @@
     "timeout": 120,
     "max_tokens": 1024,
     "max_attempts": 3,
-    "max_reflections": 1,
     "temperature": 0.1,
     "max_requests_per_run": 50
   },
