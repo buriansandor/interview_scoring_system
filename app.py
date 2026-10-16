@@ -8,9 +8,9 @@ import pandas as pd
 from google import genai
 from google.genai import types
 import security, guardrails
-from local_llm import RequestBudgetExceeded, validate_evaluation
+from local_llm import RequestBudgetExceeded
 from llm_config import load_config
-from llm_providers import build_client
+from scoring_engine import AUDIT_COLUMNS, build_scorer, validate_scale
 
 logger = logging.getLogger("agent")
 logger.setLevel(logging.INFO)
@@ -118,7 +118,7 @@ def confidentality_enhance(current_score: float, confidence: float, reasoning: s
     instead, we initiate a guided re-evaluation (Self-Refine) loop.
     """
     if confidence < 0.5:
-        return f"[WARNING] The model's confidence is low ({confidence}); initiating a guided Self-Refine loop. Reasoning: {reasoning}. Please re-read the respondent's texts and provide a new evaluation. Focus in whether the response contains the key points and whether it is relevant to the question. Please provide a new score and reasoning. If the issue persists, use a lower score, but with at least 0.51 confidence value."
+        return f"[WARNING] The reported confidence is low ({confidence}). Re-evaluate using only the answer, rubric and written reasoning: {reasoning}. Keep genuine uncertainty; do not force confidence upward, lower the score solely for missing evidence, or claim access to hidden model reasoning."
     else:
         return f"[INFO] The model's confidence is sufficient ({confidence}); no Self-Refine loop needed. Reasoning: {reasoning}."
     
@@ -274,12 +274,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
     try:
         config = load_config(args.config or "llm_config.json", require_file=args.config is not None)
-        scoring_client = build_client(config.llm)
+        scoring_client = build_scorer(config)
     except (ValueError, OSError) as error:
         logger.error("Invalid LLM configuration: %s", error)
         raise SystemExit(1)
     logger.info(
-        "Using provider %s with model %s; no automatic provider fallback.",
+        "Using primary provider %s with model %s; second stage follows explicit configuration.",
         config.llm.provider, config.llm.model,
     )
 
@@ -305,10 +305,17 @@ if __name__ == "__main__":
     for q_obj in scoring_rules["questions"]:
         for question_key, rule_data in q_obj.items():
             rules_dict[question_key] = rule_data
+    try:
+        for question in df.columns:
+            if question in rules_dict:
+                validate_scale(rules_dict[question][1], rules_dict[question][2])
+    except (ValueError, TypeError, IndexError):
+        logger.error("Invalid scoring range: require finite numeric range_min < range_max.")
+        raise SystemExit(1)
 
     results_list = []
     output_file = config.output_csv
-    result_columns = ["respondent_row", "question", "original_answer", "score", "confidence", "reasoning"]
+    result_columns = ["respondent_row", "question", "original_answer", "score", "confidence", "reasoning"] + AUDIT_COLUMNS
 
     for position, (index, row) in enumerate(df.iterrows(), start=1):
         print(f"[{position}/{len(df)}]\tRow processing...")
@@ -329,36 +336,25 @@ if __name__ == "__main__":
                 
                 # Call the agent
                 try:
-                    final_evaluation = scoring_client.score(
+                    final_evaluation = scoring_client.evaluate(
                         system_prompt, question_column, scoring_method,
                         range_min, range_max, safe_answer_text,
                     )
                 except RequestBudgetExceeded:
                     pd.DataFrame(results_list, columns=result_columns).to_csv(output_file, index=False)
-                    logger.error("Request budget exhausted. Partial results saved; no provider fallback.")
+                    logger.error("Request budget exhausted. Partial results saved; no further calls.")
                     raise SystemExit(2)
 
-                if final_evaluation is None:
-                    attempt_limit = config.llm.max_attempts
-                    logger.error("[ERROR]\tRow %d, Question '%s': Agent failed to provide a valid evaluation after at most %d attempts. Skipping.", position + 1, question_column, attempt_limit)
-                    continue
-                else:
-                    # 1. Convert the JSON string to a Python dictionary
-                    try:
-                        eval_data = validate_evaluation(final_evaluation, range_min, range_max)
-                    except ValueError:
-                        logger.error("Row %d, Question '%s': Invalid evaluation; not saved.", position + 1, question_column)
-                        continue
-
-                    # 2. Save the extracted parameters to separate keys (columns)
-                    results_list.append({
-                        "respondent_row": position + 1,
-                        "question": question_column,
-                        "original_answer": safe_answer_text,
-                        "score": eval_data.get("score"),
-                        "confidence": eval_data.get("confidence"),
-                        "reasoning": eval_data.get("reasoning")
-                    })
+                results_list.append({
+                    "respondent_row": position,
+                    "question": question_column,
+                    "original_answer": safe_answer_text,
+                    **final_evaluation,
+                })
+                if final_evaluation["stop_requested"]:
+                    pd.DataFrame(results_list, columns=result_columns).to_csv(output_file, index=False)
+                    logger.error("Shared request budget exhausted. Current audit row and partial results saved.")
+                    raise SystemExit(2)
             else:
                 logger.warning("[WARNING]\tRow %d, Question '%s' is not defined in the JSON rules. Skipping.", position + 1, question_column)
                 continue
@@ -368,4 +364,9 @@ if __name__ == "__main__":
     result_df = pd.DataFrame(results_list, columns=result_columns)
     result_df.to_csv(output_file, index=False)
     logger.info("[SYSTEM]\tResults saved to '%s'", output_file)
-    logger.info("[SYSTEM]\tExecution completed successfully.")
+    logger.info(
+        "[SYSTEM]\tExecution completed. Saved rows=%d, failed=%d, needs_review=%d.",
+        len(results_list),
+        sum(row["score"] is None for row in results_list),
+        sum(row["needs_review"] for row in results_list),
+    )

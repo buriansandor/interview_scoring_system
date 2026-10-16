@@ -141,6 +141,43 @@ class NotebookSecretsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             load_notebook_config(self.path)
 
+    def test_configured_secondary_secrets_are_forwarded_privately(self):
+        self.path.write_text(json.dumps({
+            "primary": {"provider": "groq_free"},
+            "secondary": {"provider": "gemini"},
+        }), encoding="utf-8")
+        (self.directory / "app.py").write_text("# fixture\n", encoding="utf-8")
+        (self.directory / "scored_answers.csv").write_text("score\n3\n", encoding="utf-8")
+        values = {"GROQ_API_KEY": "test-primary", "GEMINI_API_KEY": "test-secondary"}
+        getter = Mock(side_effect=values.__getitem__)
+        fake = SimpleNamespace(userdata=SimpleNamespace(get=getter))
+        with patch.dict(sys.modules, {"google.colab": fake}), patch(
+            "notebook_support.subprocess.run", return_value=subprocess.CompletedProcess([], 0)
+        ) as run:
+            run_notebook(self.path, self.directory, use_colab_secrets=True)
+        self.assertEqual(run.call_args.kwargs["env"]["GROQ_API_KEY"], "test-primary")
+        self.assertEqual(run.call_args.kwargs["env"]["GEMINI_API_KEY"], "test-secondary")
+        self.assertNotIn("GROQ_API_KEY", os.environ)
+        self.assertNotIn("GEMINI_API_KEY", os.environ)
+        self.assertNotIn("test-secondary", " ".join(run.call_args.args[0]))
+
+    def test_missing_secondary_secret_does_not_block_primary_subprocess(self):
+        self.path.write_text(json.dumps({
+            "primary": {"provider": "local"}, "secondary": {"provider": "groq_free"},
+        }), encoding="utf-8")
+        (self.directory / "app.py").write_text("# fixture\n", encoding="utf-8")
+        (self.directory / "scored_answers.csv").write_text("score\n3\n", encoding="utf-8")
+        getter = Mock(side_effect=RuntimeError("Secret access denied"))
+        fake = SimpleNamespace(userdata=SimpleNamespace(get=getter))
+        with patch.dict(sys.modules, {"google.colab": fake}), patch(
+            "notebook_support.subprocess.run", return_value=subprocess.CompletedProcess([], 0)
+        ) as run:
+            with self.assertWarnsRegex(RuntimeWarning, "primary will still run"):
+                result = run_notebook(self.path, self.directory, use_colab_secrets=True)
+        run.assert_called_once()
+        self.assertEqual(result.iloc[0]["score"], 3)
+        getter.assert_called_once_with("GROQ_API_KEY")
+
 
 class NotebookExecutionTests(unittest.TestCase):
     def test_notebooks_are_clean_and_code_cells_compile(self):
@@ -185,7 +222,7 @@ class NotebookExecutionTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as directory:
                 work = Path(directory)
                 for module in ("app.py", "local_llm.py", "llm_config.py", "llm_providers.py",
-                               "notebook_support.py", "security.py", "guardrails.py"):
+                               "scoring_engine.py", "notebook_support.py", "security.py", "guardrails.py"):
                     shutil.copy2(ROOT / module, work / module)
                 shutil.copytree(ROOT / "specs", work / "specs")
                 (work / "input.csv").write_text("Question\nAnswer\n", encoding="utf-8")

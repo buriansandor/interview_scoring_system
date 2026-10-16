@@ -11,13 +11,21 @@ mezőt kell átírnod:
 
 ```json
 {
-  "provider": "groq_free"
+  "primary": {"provider": "groq_free"},
+  "secondary": null
 }
 ```
 
 Ez önálló minimális konfigurációként is érvényes. A többi mezőhöz a program
 alapértékeket használ; a minimális változatnál a bemeneti fájlok automatikus
 keresése csak akkor működik, ha egyértelmű a találat.
+
+Az opcionális `secondary` második modellt jelöl. `null` esetén szükség
+esetén az elsődleges kap új, külön felülvizsgálati kérést. A régi felső
+szintű `provider` mező támogatott, de nem szerepelhet együtt a `primary`
+mezővel. A súlyokat és küszöböket a `review` blokk adja meg.
+Részletes döntési táblázat, képletek és CSV-mezők:
+[TWO_STAGE_SCORING.md](TWO_STAGE_SCORING.md).
 
 | `provider` | Alapértelmezett modell | API-kulcs fájlja |
 |---|---|---|
@@ -39,7 +47,8 @@ Egy minimális, de konkrét fájlokat megadó beállítás:
 
 ```json
 {
-  "provider": "local",
+  "primary": {"provider": "local"},
+  "secondary": null,
   "input_csv": "tests/results/test.csv",
   "rules_json": "evaluation.json",
   "output_csv": "scored_answers.csv",
@@ -67,7 +76,9 @@ modellnév pedig a telepített modell pontos tagje, az
 szerint.
 
 A program nem indítja el a modellszervert és nem tölt le modellt. Helyi
-módban nem kér felhős kulcsot és nem vált át felhős szolgáltatóra.
+módban, `secondary: null` mellett nem kér felhős kulcsot és mindkét
+lépés helyi marad. Kifejezetten beállított felhős másodlagos szükség
+esetén megkapja az értékelendő adatokat.
 Ha a helyi szerver hitelesítést használ, külön `api_key_file` vagy
 `api_key_env` beállítható. A végpontot csak megbízható gépre irányítsd.
 
@@ -79,7 +90,8 @@ oszd meg és ne töltsd fel őket a repóba.
 
 Környezeti változó is használható: `GEMINI_API_KEY`, `MISTRAL_API_KEY`,
 `GROQ_API_KEY`, `OPENROUTER_API_KEY`. Ezek elsőbbséget élveznek a kulcsfájllal
-szemben. A program kizárólag a kiválasztott szolgáltató kulcsát keresi.
+szemben. A CLI az elsődleges kulcsát, szükség esetén pedig a kifejezetten
+beállított másodlagosét keresi.
 Az inline `api_key` mező a JSON-ban szándékosan nem engedélyezett.
 
 A JSON-szolgáltatóválasztás elsőbbséget élvez a régi `LLM_PROVIDER`
@@ -126,10 +138,12 @@ a kimeneti CSV-t DataFrame-ként. Nincs külön, Geminihez kötött pontozókód
 - **Colab:** `Interview_answer_scoring_system-colab_version.ipynb`.
   A setup csak hiányzó checkout esetén klónoz; meglévő fájlokat nem
   állít vissza és nem vált ágat. A PR nyitva tartása alatt az alapértelmezett
-  `REPO_REF` a `feat/json-llm-provider-config`; merge után válts `main`-re.
-- **Secrets:** kizárólag a kiválasztott felhős szolgáltató hiányzó kulcsát
-  keresi, a profil `api_key_env` nevével. A környezeti változó és a
-  kiválasztott `.key` fájl elsőbbséget élvez. Helyi módhoz nem kér Colab
+  `REPO_REF` a `feat/two-stage-llm-scoring`; merge után válts `main`-re.
+- **Secrets:** csak a beállított szerepek hiányzó felhős kulcsait keresi,
+  a profil `api_key_env` nevével. A környezeti változó és a
+  kiválasztott `.key` fájl elsőbbséget élvez. A másodlagos kulcsát a
+  wrapper előre előkészíti a gyermekfolyamatnak, de sikertelen hozzáférés
+  nem akadályozza az elsődlegest. Helyi szerephez nem kér Colab
   Secretet. A kulcs a gyermekfolyamat környezetébe kerül, nem parancssori
   argumentumba, notebookforrásba vagy automatikusan létrehozott fájlba.
 - **Részleges eredmény:** a futási keret kimerülését figyelmeztetés és
@@ -165,8 +179,9 @@ A külső Kaggle-másolatot ez a repómódosítás nem szinkronizálja.
 - `timeout`: egy kérés időkorlátja másodpercben.
 - `max_tokens`: egy válasz maximális kimeneti tokenkerete.
 - `max_attempts`: egy interjúválasz összes modellhívása, javításokkal együtt.
-- `max_reflections`: alacsony confidence esetén megengedett újraértékelések.
-- `max_requests_per_run`: az egész futás kéréskerete, újrapróbálkozásokkal együtt.
+- `max_reflections`: régi transzportopció; a kétlépcsős útvonalon nem
+  vezérel további felülvizsgálatot, legfeljebb egy második lépés indul.
+- `max_requests_per_run`: közös keret a két modell összes kérésére és retry-jára.
 - `requests_per_minute`: szolgáltatói profilban megadott ütemezési korlát.
 
 A futási kéréskeret kimerülésekor a program elmenti az addigi eredményeket
@@ -203,8 +218,9 @@ kulcsot adsz meg.
   [API routing paraméterei szerint](https://openrouter.ai/docs/guides/routing/provider-selection).
 - Helyi modellnél nincs szolgáltatói API-díj, de a hardver és az áram nem ingyenes.
 
-Nincs automatikus szolgáltatóváltás. Elérhetőségi hiba vagy kvótakimerülés
-nem kapcsol be egy másik, esetleg fizetős szolgáltatót.
+Nem konfigurált szolgáltatóra nincs automatikus váltás. A második lépés
+kizárólag a beállított másodlagost vagy ugyanazt az elsődlegest használja.
+A közös kéréskeret kimerülése nem indít további modellhívást.
 
 ## Tesztelés és korlátok
 
@@ -214,7 +230,7 @@ python -m unittest discover -s tests -v
 
 A tesztek konfigurációt, kulcsválasztást, validálást, híváskeretet,
 ütemezést, HTTP-kéréseket és a teljes CSV-feldolgozást vizsgálnak.
-A 62 teszt tiszta virtuális környezetben is sikeresen lefutott, és a
+A 101 teszt tiszta virtuális környezetben is sikeresen lefutott, és a
 függőségellenőrzés nem talált hibás követelményt.
 A HTTP-tesztek helyi tesztszervert, a Gemini-teszt mockolt SDK-t használ:
 nem minősítik a valós modellek pontozási minőségét vagy aktuális
